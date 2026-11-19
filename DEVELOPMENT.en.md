@@ -205,3 +205,17 @@ Package and lock versions must advance with each complete increment. The GitHub 
 
 
 Run `npm run test:agents` for native acceptance inside Electron’s Node16: SDK and local model mock, real SQLite, discovery between two users and an Agent, long TCP messages, explicit group mentions and exit/offline behavior. It uses only temporary directories and loopback ports. If the Electron binary is unavailable, this check remains unverified.
+
+## macOS LAN test package signing
+
+A package without a developer certificate still needs a complete resource seal. Setting only mac.identity=null leaves Electron’s linker ad-hoc signature behind and may produce a “damaged” warning on another Mac. Enable the dedicated afterPack hook explicitly for LAN testing; do not change the normal signing path or system protections.
+
+Run npm run build first, choose a new empty output directory, then run:
+
+```sh
+node node_modules/electron-builder/cli.js --mac dmg --arm64 --publish never --config.electronDist=node_modules/electron/dist --config.mac.identity=null --config.afterPack=./scripts/sign-mac-lan.cjs --config.directories.output=release/lan-fixed
+```
+
+The hook reuses the existing official @electron/osx-sign library and electron-builder’s standard Electron entitlement template. It retains hardened runtime, JIT and the app-scoped permissions needed to load bundled frameworks/SQLite, without personal certificates, remote timestamps or extra camera/location permissions. Signing or strict verification failures stop packaging. Leave strictVerify unset: the old library maps true to the invalid --strict=true rather than --strict.
+
+Before delivery, run codesign --verify --deep --strict on the bundled app and hdiutil verify on the DMG, then smoke-test from a read-only mount with temporary user data and PANTRY_SMOKE=1. Ad-hoc signing is not Apple Developer ID signing or notarization. Gatekeeper may still block it; approve the individual app in System Settings → Privacy & Security, or contact the administrator of a managed device. Do not disable Gatekeeper globally. Compare SHA256 on the receiving Mac and retransmit if it differs.

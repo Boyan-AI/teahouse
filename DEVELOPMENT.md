@@ -218,3 +218,17 @@ npm run smoke     # 构建 + 启动 1.5s 干净退出（退出码 0）
 
 
 原生 Agent 回环验收入口为 `npm run test:agents`：在 Electron 内置 Node16 中验证 SDK、本地模型 mock、真实 SQLite、两个用户与 Agent 的发现、TCP 长文本、明确群提及和 exit 离线；只使用临时目录及回环端口。缺少 Electron 二进制时不能运行，必须保留为未通过验收项。
+
+## macOS 内网测试包签名
+
+无开发者证书的内网包也必须完整封装资源签名：仅设置 mac.identity=null 会残留 Electron 的 linker 临时签名，可能在接收端显示“已损坏”。内网测试可显式使用专用 afterPack 钩子；保留默认正式签名流程，不修改系统保护。
+
+先执行 npm run build，选择新的空输出目录，再运行：
+
+```sh
+node node_modules/electron-builder/cli.js --mac dmg --arm64 --publish never --config.electronDist=node_modules/electron/dist --config.mac.identity=null --config.afterPack=./scripts/sign-mac-lan.cjs --config.directories.output=release/lan-fixed
+```
+
+该钩子复用已有官方 @electron/osx-sign 和 electron-builder 标准 Electron 权限模板，保留 hardened runtime、JIT 与加载随包框架/SQLite 所需的应用内权限；不使用个人证书、不联系时间戳服务，也不添加摄像头/定位等额外权限。签名或严格校验失败会中止打包。旧库 strictVerify:true 会生成无效 --strict=true，因此保留默认 --strict，不关闭严格校验。
+
+交付前对包内 app 执行 codesign --verify --deep --strict，执行 hdiutil verify，并只读挂载后以临时用户目录和 PANTRY_SMOKE=1 验证启动退出。临时签名不等于 Apple Developer ID 或公证，Gatekeeper 仍可能阻止，需在接收端“系统设置 → 隐私与安全性”单独允许打开；受管设备须由管理员批准。不要关闭系统 Gatekeeper。接收端先比对 SHA256，文件不一致应重新传输。
