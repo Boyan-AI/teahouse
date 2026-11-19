@@ -1753,11 +1753,11 @@ if (!gotLock) {
     if (!extensionWindows.owns(event, 'agents') || typeof id !== 'string' || !agents) return false
     try { await agents.remove(id); return true } catch { return false }
   })
-  ipcMain.handle(IpcChannels.boardCreate, (event, convId: unknown, game: unknown) => {
+  ipcMain.handle(IpcChannels.boardCreate, async (event, convId: unknown, game: unknown) => {
     if (event.sender !== mainWindow?.webContents || typeof convId !== 'string' || (game !== 'gomoku' && game !== 'xiangqi') || !boards) return false
     const target = convId.startsWith('single:') ? convId.slice(7) : ''
     if (target && !registry?.get(target)) return false
-    const invite = boards.create(convId, game)
+    const invite = await boards.enter(convId, game)
     if (!invite) return false
     extensionWindows.open(invite.roomId, 'board', tr(game === 'gomoku' ? '五子棋' : '中国象棋')); return true
   })

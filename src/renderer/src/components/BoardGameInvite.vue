@@ -5,11 +5,14 @@ import type { BoardInvite } from '../../../shared/board-games'
 const props = defineProps<{ invite: BoardInvite }>()
 const failed = ref(false)
 const pending = ref(false)
-/** 历史邀请也由主进程重新验证房间和会话资格，失败时明确显示已不可用。 */
+/** 只复制协议字段，避免 Vue 响应式代理无法经 Electron IPC 克隆；主进程仍复核资格。 */
 async function open(): Promise<void> {
   if (pending.value) return
   pending.value = true
-  try { failed.value = !await window.pantry.openBoardGame(props.invite) }
+  try {
+    const { roomId, hostId, game, groupId, createdAt } = props.invite
+    failed.value = !await window.pantry.openBoardGame({ roomId, hostId, game, groupId, createdAt })
+  }
   catch { failed.value = true }
   finally { pending.value = false }
 }

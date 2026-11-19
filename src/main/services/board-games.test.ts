@@ -25,11 +25,35 @@ function network(group = true, game: 'gomoku' | 'xiangqi' = 'gomoku') {
 }
 
 describe('棋类单主机房间', () => {
+  it.each([true, false])('同会话双方从 PK 入口进入同一房间（群聊=%s）', async group => {
+    const n = network(group), id = n.invite.roomId
+    const joined = await n.b.enter(group ? 'group:g' : 'single:a', 'gomoku')
+    expect(joined?.roomId).toBe(id)
+    expect(n.host.view(id)?.room.viewers).toEqual(['a', 'b'])
+    expect((await n.host.enter(group ? 'group:g' : 'single:b', 'gomoku'))?.roomId).toBe(id)
+    expect(n.invites.get('a')).toHaveLength(1)
+    expect((await n.host.enter(group ? 'group:other' : 'single:c', 'gomoku'))?.roomId).not.toBe(id)
+    expect((await n.b.enter(group ? 'group:g' : 'single:a', 'xiangqi'))?.roomId).not.toBe(id)
+  })
+  it('首次对局必须双人入座并由玩家明确开始，旁观者不能代开', async () => {
+    const n = network(), id = n.invite.roomId
+    await n.b.open(n.invite); await n.c.open(n.invite)
+    expect(await n.host.action(id, { kind: 'start' })).toBe(false)
+    await n.host.action(id, { kind: 'seat', side: 0 })
+    expect(await n.host.action(id, { kind: 'start' })).toBe(false)
+    await n.b.action(id, { kind: 'seat', side: 1 })
+    expect(n.host.view(id)?.room.phase).toBe('waiting')
+    await n.c.action(id, { kind: 'start' })
+    expect(n.host.view(id)?.room.phase).toBe('waiting')
+    await n.b.action(id, { kind: 'start' })
+    expect(n.c.view(id)?.room.phase).toBe('playing')
+    expect(await n.host.action(id, { kind: 'start' })).toBe(false)
+  })
   it('邀请不自动加入，选座只容纳两人，其余旁观且不能走子', async () => {
     const n = network(); const id = n.invite.roomId
     expect(n.c.view(id)?.room.viewers).toEqual([])
     await n.b.open(n.invite); await n.c.open(n.invite)
-    await n.host.action(id, { kind: 'seat', side: 0 }); await n.b.action(id, { kind: 'seat', side: 1 })
+    await n.host.action(id, { kind: 'seat', side: 0 }); await n.b.action(id, { kind: 'seat', side: 1 }); await n.host.action(id, { kind: 'start' })
     expect(n.c.view(id)?.room.phase).toBe('playing')
     await n.c.action(id, { kind: 'move', from: -1, to: 10 })
     expect(n.host.view(id)?.room.state.plies).toBe(0)
@@ -49,7 +73,7 @@ describe('棋类单主机房间', () => {
     n.host.receive('b', { op: 'request', roomId: id, revision, action: { kind: 'seat', side: 0 } })
     n.host.receive('c', { op: 'request', roomId: id, revision, action: { kind: 'seat', side: 0 } })
     expect(n.host.view(id)?.room.seats).toEqual(['b', null]); expect(n.c.view(id)?.error).toBe('stale')
-    await n.host.action(id, { kind: 'seat', side: 1 })
+    await n.host.action(id, { kind: 'seat', side: 1 }); await n.host.action(id, { kind: 'start' })
     const packet: BoardPacket = { op: 'request', roomId: id, revision: n.host.view(id)!.room.revision, action: { kind: 'move', from: -1, to: 0 } }
     n.host.receive('b', packet); n.host.receive('b', packet)
     expect(n.host.view(id)?.room.state.plies).toBe(1)
@@ -62,7 +86,7 @@ describe('棋类单主机房间', () => {
   })
   it('离群即丧失权限，已入座者离开视为认输', async () => {
     const n = network(), id = n.invite.roomId
-    await n.b.open(n.invite); await n.host.action(id, { kind: 'seat', side: 0 }); await n.b.action(id, { kind: 'seat', side: 1 })
+    await n.b.open(n.invite); await n.host.action(id, { kind: 'seat', side: 0 }); await n.b.action(id, { kind: 'seat', side: 1 }); await n.host.action(id, { kind: 'start' })
     n.remove('b'); n.host.prune()
     expect(n.host.view(id)?.room.state.winner).toBe(0)
     expect(n.host.view(id)?.room.seats).toEqual(['a', null])
@@ -80,7 +104,7 @@ describe('棋类单主机房间', () => {
   })
   it('象棋同一轮次局面出现三次判和，重开必须双方准备', async () => {
     const n = network(false, 'xiangqi'), id = n.invite.roomId
-    await n.b.open(n.invite); await n.host.action(id, { kind: 'seat', side: 0 }); await n.b.action(id, { kind: 'seat', side: 1 })
+    await n.b.open(n.invite); await n.host.action(id, { kind: 'seat', side: 0 }); await n.b.action(id, { kind: 'seat', side: 1 }); await n.host.action(id, { kind: 'start' })
     for (let i = 0; i < 2; i++) {
       await n.host.action(id, { kind: 'move', from: 82, to: 63 })
       await n.b.action(id, { kind: 'move', from: 1, to: 18 })

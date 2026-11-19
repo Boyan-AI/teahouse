@@ -25,7 +25,7 @@ export function isBoardAction(value: unknown): value is BoardAction {
   if (value.kind === 'move') return keys(value, ['kind', 'from', 'to']) &&
     Number.isInteger(value.from) && Number(value.from) >= -1 && Number(value.from) < 225 &&
     Number.isInteger(value.to) && Number(value.to) >= 0 && Number(value.to) < 225
-  return keys(value, ['kind']) && ['join', 'spectate', 'leave', 'resign', 'ready'].includes(String(value.kind))
+  return keys(value, ['kind']) && ['join', 'spectate', 'leave', 'resign', 'ready', 'start'].includes(String(value.kind))
 }
 /** 快照包含固定长度棋盘和有上限的成员列表，防止超量分配与非法枚举。 */
 export function isBoardRoom(value: unknown): value is BoardRoom {

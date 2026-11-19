@@ -4,7 +4,7 @@ import { tr } from '../utils/i18n'
 import { isPlainEscape } from '../utils/escape'
 import AvatarMark from './AvatarMark.vue'
 
-// Teleport 形成第二个根节点，头像尺寸等属性显式透传给可见根。
+// 保持单个可见根（Teleport 放根内），让调用方 scoped 尺寸样式正确作用到头像。
 defineOptions({ inheritAttrs: false })
 
 /** 群消息和成员列表共用头像菜单；仅菜单打开期间监听全局事件。 */
@@ -109,7 +109,6 @@ onBeforeUnmount(() => close())
     @click.stop="toggle"
   >
     <AvatarMark class="face" :avatar="avatar" :avatar-hash="avatarHash" :name="name" :presence="presence" />
-  </component>
   <Teleport to="body">
     <div
       v-if="opened"
@@ -125,6 +124,7 @@ onBeforeUnmount(() => close())
       <button v-if="canOpenChat" type="button" role="menuitem" @click="select('open-chat')">{{ tr('发起私聊') }}</button>
     </div>
   </Teleport>
+  </component>
 </template>
 
 <style scoped>

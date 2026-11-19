@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { compileScript, parse } from '@vue/compiler-sfc'
 import { renderToString } from '@vue/server-renderer'
-import { computed, createSSRApp, ref } from 'vue'
+import { computed, createSSRApp, reactive, ref } from 'vue'
 import ts from 'typescript'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initialGame, legalXiangqiMove, type BoardView } from '../../../shared/board-games'
@@ -63,5 +63,26 @@ describe('棋盘生产交互', () => {
     expect((grid.match(/<button/g) ?? []).length).toBe(count)
     expect((grid.match(/disabled/g) ?? []).length).toBe(count)
     expect(html).toContain('正在旁观')
+  })
+})
+
+/** 实际邀请卡处理响应式 props 时，必须发送 Electron 可结构化克隆的普通对象。 */
+describe('邀请卡 IPC 边界', () => {
+  it('点击响应式邀请可以进入，且只发送五个协议字段', async () => {
+    const source = readFileSync(new URL('../components/BoardGameInvite.vue', import.meta.url), 'utf8')
+    const script = source.split('<script setup lang="ts">')[1].split('</script>')[0]
+    const ast = ts.createSourceFile('invite.ts', script, ts.ScriptTarget.Latest, true)
+    const actual = ast.statements.find(s => ts.isFunctionDeclaration(s) && s.name?.text === 'open')!.getText(ast)
+    const invite = { roomId: 'r', hostId: 'host', game: 'xiangqi', groupId: '', createdAt: 1 }
+    const props = reactive({ invite }), pending = ref(false), failed = ref(false)
+    const send = vi.fn(async value => { structuredClone(value); return true })
+    vi.stubGlobal('window', { pantry: { openBoardGame: send } })
+    const code = ts.transpileModule(actual + '\nreturn open;', { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText
+    const open = new Function('props', 'pending', 'failed', code)(props, pending, failed)
+    await open()
+    expect(failed.value).toBe(false)
+    expect(pending.value).toBe(false)
+    expect(send).toHaveBeenCalledWith(invite)
+    expect(send.mock.calls[0][0]).not.toBe(props.invite)
   })
 })

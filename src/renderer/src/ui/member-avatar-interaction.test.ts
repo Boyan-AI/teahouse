@@ -81,17 +81,22 @@ async function renderAvatar(canInteract: boolean): Promise<string> {
   }
   const exports = {} as { default: Parameters<typeof createSSRApp>[0] }
   new Function('require', 'exports', compiled)(localRequire, exports)
-  return renderToString(createSSRApp(exports.default, { avatar: 1, avatarHash: '', name: 'Alice',
-    canMention: canInteract, canOpenChat: canInteract, class: 'msg-avatar' }))
+  // 父级 scoped 选择器必须能命中可见根，只有透传 class 无法证明尺寸生效。
+  const parent = defineComponent({ __scopeId: 'data-v-avatar-parent', setup: () => () => h(exports.default, {
+    avatar: 1, avatarHash: '', name: 'Alice', canMention: canInteract, canOpenChat: canInteract, class: 'msg-avatar'
+  }) })
+  return renderToString(createSSRApp(parent))
 }
 
 describe('共享头像菜单真实交互', () => {
   it('生产 SFC 渲染保留头像尺寸 class，可交互成员使用原生按钮，本人使用静态容器', async () => {
     const member = await renderAvatar(true)
     expect(member).toMatch(/<button[^>]*class="[^"]*msg-avatar/)
+    expect(member).toMatch(/<button[^>]*data-v-avatar-parent/)
     expect(member).toContain('aria-haspopup="menu"')
     const self = await renderAvatar(false)
     expect(self).toMatch(/<span[^>]*class="[^"]*msg-avatar/)
+    expect(self).toMatch(/<span[^>]*data-v-avatar-parent/)
     expect(self).not.toContain('<button')
   })
 
@@ -158,7 +163,7 @@ describe('共享头像菜单真实交互', () => {
     h.dispose()
   })
 
-  it('多根节点显式透传尺寸，两个群聊入口均有提及和私聊接线', () => {
+  it('单可见根显式透传属性，两个群聊入口均有提及和私聊接线', () => {
     expect(menuSource).toContain('defineOptions({ inheritAttrs: false })')
     expect(menuSource).toContain('v-bind="$attrs"')
     expect(menuSource).toContain('role="menuitem"')

@@ -42,6 +42,7 @@
     "dist:linux": "npm run build && cross-env NO_UPDATE_NOTIFIER=1 USE_HARD_LINKS=false electron-builder --linux deb:x64 AppImage:x64 --publish never",
     "dist:linux:arm64": "npm run build && cross-env NO_UPDATE_NOTIFIER=1 USE_HARD_LINKS=false electron-builder --linux deb:arm64 AppImage:arm64 --publish never",
     "dist:mac": "npm run build && cross-env NO_UPDATE_NOTIFIER=1 electron-builder --mac --publish never",
+    "test:extensions": "node scripts/extension-ui-selftest.cjs",
     "test:agents": "esbuild src/main/services/agents/selftest.ts --bundle --platform=node --target=node16 --external:better-sqlite3 --external:@anthropic-ai/sdk --external:node-fetch --outfile=out/agent-selftest.cjs --log-level=warning && cross-env ELECTRON_RUN_AS_NODE=1 electron out/agent-selftest.cjs"
   },
   "build": {

@@ -35,6 +35,23 @@ export class BoardGamesService extends EventEmitter {
     this.timer.unref?.()
   }
 
+  /** PK 入口优先重进同会话同棋种的有效房间，避免双方各点一次就分房。 */
+  async enter(convId: string, game: BoardGame): Promise<BoardInvite | null> {
+    this.prune()
+    const groupId = convId.startsWith('group:') ? convId.slice(6) : ''
+    const opponent = convId.startsWith('single:') ? convId.slice(7) : ''
+    const candidates = [...this.entries.values()].filter(entry => entry.room.game === game && entry.room.phase !== 'closed' &&
+      this.authorized(entry, this.deps.selfId) && (groupId ? entry.room.groupId === groupId :
+        Boolean(opponent) && !entry.room.groupId && entry.opponent === opponent))
+    candidates.sort((a, b) => a.room.createdAt - b.room.createdAt || a.room.roomId.localeCompare(b.room.roomId))
+    if (candidates.length) {
+      const { roomId, hostId, game: existingGame, groupId: existingGroup, createdAt } = candidates[0].room
+      const invite: BoardInvite = { roomId, hostId, game: existingGame, groupId: existingGroup, createdAt }
+      return await this.open(invite) ? invite : null
+    }
+    return this.create(convId, game)
+  }
+
   /** 只向支持房间协议的在线会话成员发送邀请，不强行唤起对方窗口。 */
   create(convId: string, game: BoardGame): BoardInvite | null {
     this.prune()
@@ -204,7 +221,9 @@ export class BoardGamesService extends EventEmitter {
       if (room.seats[action.side] && room.seats[action.side] !== from) return this.reject(entry, from, 'full')
       if (side >= 0) room.seats[side] = null
       room.seats[action.side] = from; room.ready = []
-      if (room.phase === 'waiting' && room.seats.every(Boolean)) this.begin(entry)
+    } else if (action.kind === 'start') {
+      if (room.phase !== 'waiting' || side < 0 || !room.seats.every(Boolean)) return this.reject(entry, from, 'forbidden')
+      this.begin(entry)
     } else if (action.kind === 'spectate' || action.kind === 'resign') {
       if (side >= 0) this.depart(entry, from, false)
     } else if (action.kind === 'ready') {
@@ -224,7 +243,7 @@ export class BoardGamesService extends EventEmitter {
     this.commit(entry); return true
   }
 
-  /** 双方到齐或共同申请重开时初始化盘面，不自动替旁观者入座。 */
+  /** 双方入座后明确开始，或共同申请重开时初始化盘面。 */
   private begin(entry: Entry): void {
     entry.room.state = initialGame(entry.room.game); entry.room.phase = 'playing'; entry.room.reason = 'none'; entry.room.ready = []
     entry.positions = new Map([[positionKey(entry.room.state), 1]])

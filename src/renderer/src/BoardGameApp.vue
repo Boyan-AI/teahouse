@@ -18,7 +18,7 @@ const status = computed(() => {
   const r = room.value
   if (!r) return tr('正在连接房间…')
   if (r.phase === 'closed') return tr(r.reason === 'expired' ? '房间已过期' : '房主已离线，房间结束')
-  if (r.phase === 'waiting') return tr('请选择座位，双方入座后开始')
+  if (r.phase === 'waiting') return tr(r.seats.every(Boolean) ? '双方已入座，点击开始对局' : '请选择座位，等待另一位玩家加入')
   if (r.state.winner === 'draw') return tr('和棋')
   if (r.state.winner !== null) return tr('{0} 获胜', { 0: sideLabel(r.state.winner) })
   return tr('轮到 {0}', { 0: sideLabel(r.state.turn) })
@@ -80,6 +80,8 @@ onUnmounted(() => { for (const stop of subscriptions) stop() })
           {{ room.seats[side] === view.selfId ? ' (' + tr('我') + ')' : '' }}
         </button>
       </section>
+      <p class="hint">{{ tr('房间：{0}', { 0: room.roomId.slice(0, 8) }) }} · {{ tr('已加入：{0}', { 0: room.viewers.map(id => view?.names[id] || id.slice(0, 8)).join('、') }) }}</p>
+      <button v-if="room.phase === 'waiting'" class="start" type="button" :disabled="pending || mySide < 0 || !room.seats.every(Boolean)" @click="act({ kind: 'start' })">{{ tr('开始对局') }}</button>
       <div class="board" :class="room.game" role="group" :aria-label="title">
         <button v-for="(piece, index) in room.state.board" :key="index" type="button" :class="{ selected: selected === index }" :disabled="!myTurn || pending || (room.game === 'gomoku' && !!piece)" :aria-label="tr('第 {0} 行，第 {1} 列：{2}', { 0: Math.floor(index / (room.game === 'gomoku' ? 15 : 9)) + 1, 1: index % (room.game === 'gomoku' ? 15 : 9) + 1, 2: pieceLabel(piece) || tr('空位') })" @click="play(index)">
           <span v-if="piece" class="piece" :class="{ dark: room.game === 'gomoku' ? piece === 1 : piece < 0, light: room.game === 'gomoku' && piece === 2, red: room.game === 'xiangqi' && piece > 0 }">{{ room.game === 'xiangqi' ? pieceLabel(piece) : '' }}</span>
@@ -104,7 +106,7 @@ header, .seats, footer { display:flex; align-items:center; gap:12px; justify-con
 h1 { font-size:22px; margin:0; } header span, .hint { color:var(--text-2); font-size:13px; line-height:1.6; }
 .status { font-weight:600; margin:16px 0; } .seats { margin-bottom:16px; } .seats button { flex:1; }
 button { padding:8px 12px; border:1px solid var(--line); border-radius:6px; font:inherit; color:var(--text-1); background:var(--surface-hover); cursor:pointer; }
-button:disabled { cursor:default; } footer { margin-top:16px; font-size:13px; }
+.start { display:block; margin:0 auto 16px; background:var(--primary); color:var(--on-primary); } button:disabled { opacity:.55; cursor:default; } footer { margin-top:16px; font-size:13px; }
 .board { display:grid; width:min(100%,600px); margin:auto; padding:8px; box-sizing:border-box; border:1px solid var(--primary-border); background:var(--bg-list); }
 .gomoku { grid-template-columns:repeat(15,minmax(0,1fr)); aspect-ratio:1; }
 .xiangqi { grid-template-columns:repeat(9,minmax(0,1fr)); aspect-ratio:9/10; max-width:504px; }

@@ -196,10 +196,12 @@ Click **AI** beside the contact search field to open **Agent manager**. Enter a 
 
 ### Gomoku and Chinese chess
 
-In a direct or group conversation, choose **Gomoku** or **Chinese chess** from **PK**. The creator opens an independent board; recipients click an invitation card to join. At least one online peer with board-game support is required. Older clients are never forced to open a window.
+In a direct or group conversation, choose **Gomoku** or **Chinese chess** from **PK**. The creator opens an independent board; recipients click an invitation card to join. Opening the same game from PK in the same conversation reuses an existing active room. At least one online peer with board-game support is required. Older clients are never forced to open a window.
 
-- Join as a spectator, then choose a black/white or red/black seat. Play starts when both seats are occupied. Full rooms accept spectators only, who cannot move. Access is limited to the original direct-message peers or current group members.
+- Join as a spectator, then choose a black/white or red/black seat. Once both seats are occupied, either seated player clicks **Start game**. Spectators cannot start it. Full rooms accept spectators only, who cannot move. Access is limited to the original direct-message peers or current group members.
 - Gomoku: 15×15, no forbidden moves, five or more in a row wins. Xiangqi validates horse legs, elephant eyes, river/palace boundaries, cannon screens, facing generals and self-check. Checkmate and stalemate both lose. Threefold repetition with the same side to move draws; tournament perpetual-check/chase adjudication is not implemented.
 - Leaving a seat or closing the board during play asks for confirmation and counts as resignation. Both seated players can ready up for another game. Spectators can close their window without affecting play.
 - The host arbitrates seats and moves. The main process checks stale/replayed requests, seat races and spectator permissions. Rooms end when the host quits or is declared offline; host migration is not supported. Rooms expire after two hours, with at most 32 retained rooms per client.
 - Invitations stay in chat history but must pass live-room and membership checks when reopened; ended rooms cannot be restored. Existing dice and rock–paper–scissors PK remain unchanged.
+
+Developer validation: run `npm run build`, then `npm run test:extensions`. The script launches three isolated Electron clients and uses loopback networking only to verify games, spectators, avatars, and the Agent form. Screenshots and results are saved under `out/extension-ui-*`; no real model service is called.

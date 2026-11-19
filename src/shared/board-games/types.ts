@@ -24,7 +24,7 @@ export interface BoardRoom extends BoardInvite {
   reason: 'none' | 'win' | 'draw' | 'resigned' | 'host-left' | 'expired'
 }
 export type BoardAction =
-  | { kind: 'join' | 'spectate' | 'leave' | 'resign' | 'ready' }
+  | { kind: 'join' | 'spectate' | 'leave' | 'resign' | 'ready' | 'start' }
   | { kind: 'seat'; side: Side }
   | { kind: 'move'; from: number; to: number }
 export type BoardPacket =
