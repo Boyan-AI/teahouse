@@ -29,6 +29,8 @@ const BUCKET_TTL_MS = 10 * 60_000
  */
 export class UdpChannel extends EventEmitter {
   private socket: Socket | null = null
+  private pendingSends = 0
+  private closeAfterSends: (() => void) | null = null
   private readonly buckets = new Map<string, Bucket>()
   private readonly rate: { perSecond: number; burst: number }
 
@@ -62,11 +64,15 @@ export class UdpChannel extends EventEmitter {
     })
   }
 
+  /** 先排空已提交的发送再关闭，避免 Discovery 的退出公告被异步 send 丢弃。 */
   stop(): Promise<void> {
     return new Promise((resolve) => {
       if (!this.socket) return resolve()
-      this.socket.close(() => resolve())
-      this.socket = null
+      const socket = this.socket
+      this.socket = null // 拒绝新的发送，但保留旧 socket 直到所有发送回调完成。
+      const close = (): void => { this.closeAfterSends = null; socket.close(() => resolve()) }
+      if (this.pendingSends) this.closeAfterSends = close
+      else close()
     })
   }
 
@@ -81,7 +87,14 @@ export class UdpChannel extends EventEmitter {
       return
     }
     // 发送失败（断网/不可达广播地址）静默丢弃，靠协议自身的重试与心跳自愈
-    this.socket.send(buf, port, address, () => undefined)
+    this.pendingSends++
+    // send 可能同步拒绝非法目标；无论同步失败或回调失败，都必须释放关闭等待。
+    const settled = (): void => {
+      this.pendingSends--
+      if (this.pendingSends === 0) this.closeAfterSends?.()
+    }
+    try { this.socket.send(buf, port, address, settled) }
+    catch { settled() }
   }
 
   /** 向所有目标地址广播（同端口） */

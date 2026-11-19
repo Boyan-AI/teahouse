@@ -33,6 +33,8 @@
 
 完整红线（依赖纪律、安全基线、纯内网原则、入站白名单校验等）见 [CONTRIBUTING.md「核心约束」](CONTRIBUTING.md#核心约束务必遵守)。
 
+原生模块安装与 `npm run rebuild:electron` 通过 `scripts/rebuild-electron.cjs` 调用同版本 `@electron/rebuild` 官方编程 API，避开旧 CLI 的 `yargs/yargs` 在 Node26 下的 ESM 加载错误。仍只重建 `better-sqlite3`，目标版本取项目锁定的 Electron；强制重建和 `npm_config_build_from_source=true` 均保留。不升级 Electron，也不改变全局 Node 配置。
+
 ## 进程模型与分层
 
 三个进程，单向依赖，渲染层永远碰不到系统能力：
@@ -40,7 +42,7 @@
 ```
 ┌─────────────────────────────────────────────┐
 │ 渲染进程 (Chrome 108, Vue 3 + Pinia)          │
-│   4 个 UI 入口：主窗 / 设置 / 截图 / 图片查看   │
+│   7 个 UI 入口：主窗/设置/截图/看图/协助/Agent/棋盘   │
 │   只做展示与交互，状态是主进程的「投影」         │
 └───────────────────┬─────────────────────────┘
                     │ 仅通过 window.pantry 调用
@@ -119,7 +121,7 @@ pantry/
 │  │
 │  └─ renderer/            # 渲染进程（Chrome 108，Vue 3）
 │      ├─ src/
-│      │   ├─ main.ts          按 location.hash 分流到 4 个根组件
+│      │   ├─ main.ts          按 location.hash 分流到 7 个根组件
 │      │   ├─ App.vue          主窗（三栏：导航 / 列表 / 聊天）
 │      │   ├─ SettingsApp.vue  设置窗（#/settings）
 │      │   ├─ CaptureApp.vue   截图框选（#/capture）
@@ -201,3 +203,18 @@ npm run smoke     # 构建 + 启动 1.5s 干净退出（退出码 0）
 - commit 用 `feat / fix / docs / refactor / test / chore` 前缀 + 中文描述。
 
 更细的环境坑、镜像配置、打包发布流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+
+## Agent 与棋类扩展的维护边界
+
+- `src/shared/agents.ts` 定义配置白名单和字面内网 IPv4 目标校验。`store/agent-store.ts` 原子保存独立配置，只保存系统密文；安全后端不可验证时会话密钥只留内存，不修改主聊天库结构。
+- `services/agents/model.ts` 使用固定 `@anthropic-ai/sdk@0.32.1` 和显式 Node shim/`node-fetch@2.7.0`，不依赖全局 fetch，不继承云端密钥；固定目标、禁止跳转/自动重试、请求总截止和响应字节上限不可去掉。SDK DEBUG 泄密路径被拒绝。
+- **兼容性验收注意**：SDK 0.32.1 的上游 README 列 Node18+ 为官方支持范围。固定版本已在 macOS arm64 的 Electron22.3.27 / Node16.17.1 中通过 `test:agents` 原生回环（含真实 SQLite、本地模型 HTTP、私聊 TCP、群提及和退出）。这只证明当前已测路径可用，不扩大上游支持承诺，也不替代 Windows/Linux 与真实桌面多客户端验收；升级 SDK 后必须重新运行原生测试。
+- `services/agents/runtime.ts` 每 Agent 独立 UDP 动态端口和 TCP 控制入口，复用 Discovery、Messenger、ChatService、GroupsService 与独立新数据库。随机端口不做同端口广播，通过宿主及已知节点单播探测和 gossip 发现。主机不在 UI 伪造联系人，不把人设/密钥放入 profile；`agent1` 能力防止回复循环。
+- `shared/board-games/` 为纯棋规与定长报文校验；`services/board-games.ts` 单主机裁定、动态群资格、revision 冲突恢复与三次重复计数。网络类型 `board`、能力 `board1`；可靠信封超过 UDP 限额走现有 TCP 帧。来源绑定原有联系人 IP，房间 ID 不是授权凭据。
+- 邀请用现有 `text` 消息的 `file_ref` 保存 `BoardInvite`，ID 为 `board:<roomId>`；不新增消息 kind、不迁移现有库。旧客户端忽略未知控制类型，不会获得落子能力。
+- Agent 与棋盘是两个新增 renderer 根。`windows/extension-windows.ts` 复用沙箱、导航阻断、主题就绪与缩放同步；管理和落子 IPC 按 webContents 绑定，状态仅推对应窗口。资源检查现为7入口，主窗预算不放宽。
+- 单元/回环：`npm test`；类型：`npm run typecheck`；生产构建/预算：`npm run build`。模型测试仅本地 HTTP mock，不调用真实模型或消耗密钥额度。Agent 实际原生数据库/跨客户端发现/桌面交互必须另做 Electron 验收；不要用开发机 Node 测试成功冒充 Node16 验证。
+
+
+原生 Agent 回环验收入口为 `npm run test:agents`：在 Electron 内置 Node16 中验证 SDK、本地模型 mock、真实 SQLite、两个用户与 Agent 的发现、TCP 长文本、明确群提及和 exit 离线；只使用临时目录及回环端口。缺少 Electron 二进制时不能运行，必须保留为未通过验收项。

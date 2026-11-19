@@ -61,6 +61,17 @@ ipcRenderer.on(IpcEvents.captureInit, (_event, pngBytes: ArrayBuffer) => {
 
 // 渲染进程一切能力的唯一入口（tech-design §2 安全基线：sandbox + contextBridge）
 const api: PantryApi = {
+  openAgents: () => ipcRenderer.invoke(IpcChannels.agentsOpen),
+  listAgents: () => ipcRenderer.invoke(IpcChannels.agentsList),
+  saveAgent: input => ipcRenderer.invoke(IpcChannels.agentsSave, input),
+  removeAgent: id => ipcRenderer.invoke(IpcChannels.agentsRemove, id),
+  onAgentsChanged: listener => subscribe(IpcEvents.agentsChanged, listener),
+  createBoardGame: (convId, game) => ipcRenderer.invoke(IpcChannels.boardCreate, convId, game),
+  openBoardGame: invite => ipcRenderer.invoke(IpcChannels.boardOpen, invite),
+  getBoardGame: roomId => ipcRenderer.invoke(IpcChannels.boardView, roomId),
+  actBoardGame: (roomId, action) => ipcRenderer.invoke(IpcChannels.boardAction, roomId, action),
+  onBoardGame: listener => subscribe(IpcEvents.boardChanged, listener),
+
   requestScreen: (peerId, focusOnly = false) => ipcRenderer.invoke(IpcChannels.screenRequest, peerId, focusOnly),
   getScreenSources: id => ipcRenderer.invoke(IpcChannels.screenSources, id),
   respondScreen: (id, accepted, source) => ipcRenderer.invoke(IpcChannels.screenRespond, id, accepted, source),

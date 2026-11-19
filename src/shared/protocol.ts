@@ -174,6 +174,8 @@ export const CAPS = {
    * 只表示"支持这套协议"，不代表已开共享——是否可见、可下载、可上传一律由共享方本机当场判定。
    */
   fileCabinet: 'shr1',
+  /** 独立棋类房间及可靠快照同步。 */
+  boardGames: 'board1',
   remoteView: 'rv1',
   remoteShare: 'rvs1'
 } as const
@@ -624,7 +626,8 @@ export const MSG_TYPES = {
   avatar: 'avatar',
   update: 'update',
   share: 'share',
-  screen: 'screen'
+  screen: 'screen',
+  board: 'board'
 } as const
 
 export function isAvatarHash(value: unknown): value is string {

@@ -22,6 +22,7 @@ import { Discovery } from './discovery'
 import { Messenger, type DedupStore, type QueueStore } from './messenger'
 import { TransferServer } from './transfer'
 import type { GroupRepo } from '../store/group-repo'
+import { initialGame, type BoardRoom } from '../../shared/board-games'
 import { AvatarStore, avatarHashOf } from '../services/avatar-store'
 import { AvatarService } from '../services/avatars'
 
@@ -295,6 +296,31 @@ describe('messenger 回环集成', () => {
     )
 
     await expect(sending).resolves.toBe(false)
+  })
+
+  it('棋局快照超UDP上限时通过真实回环TCP同步，并拒绝伪造来源', async () => {
+    const a = await makeStack('alice'), b = await makeStack('bob', [{ host: '127.0.0.1', port: a.port }])
+    await startTcpReceiver(b); a.discovery.start(); b.discovery.start()
+    await waitFor(() => a.registry.get(b.profile.nodeId)?.online === true)
+    const viewers = [a.profile.nodeId, b.profile.nodeId, ...Array.from({ length: 40 }, (_, i) => 'spectator-' + i)]
+    const room: BoardRoom = { roomId: 'room-network', hostId: a.profile.nodeId, groupId: 'g', game: 'gomoku', createdAt: Date.now(), revision: 2,
+      seats: [a.profile.nodeId, b.profile.nodeId], viewers, ready: [], phase: 'playing', state: initialGame('gomoku'), reason: 'none' }
+    const env = makeEnvelope(MSG_TYPES.board, a.profile.nodeId, { op: 'state', room })
+    expect(Buffer.byteLength(JSON.stringify(env))).toBeGreaterThan(UDP_MAX_PAYLOAD)
+    expect(b.messenger.acceptTcpEnvelope(env, '127.0.0.2')).toBe(false)
+    expect(await a.messenger.sendReliable(b.profile.nodeId, env)).toBe(true)
+    expect(b.incoming).toHaveLength(1); expect(b.incoming[0].payload).toEqual({ op: 'state', room })
+    expect(await a.messenger.sendReliable(b.profile.nodeId, env)).toBe(true)
+    expect(b.incoming).toHaveLength(1)
+  })
+
+  it('停止可靠通道取消在途等待，后续发送不再入离线队列', async () => {
+    const a = await makeStack('alice'), silent = await silentUdp(), peer = makeProfile('silent')
+    a.registry.touch(peer.nodeId, '127.0.0.1', silent.port, peer)
+    const outcome = a.messenger.sendUserMessage(peer.nodeId, textEnv(a.profile.nodeId, 'pending'))
+    a.messenger.stop()
+    expect(await outcome).toBe('queued'); expect(a.queue.items).toHaveLength(0)
+    expect(await a.messenger.sendReliable(peer.nodeId, textEnv(a.profile.nodeId, 'stopped'))).toBe(false)
   })
 
   it('超长文本通过 TCP 控制帧直达', async () => {

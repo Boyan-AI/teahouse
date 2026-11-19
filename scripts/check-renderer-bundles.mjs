@@ -2,9 +2,12 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const REQUIRED_ROOTS = ['App.vue', 'SettingsApp.vue', 'CaptureApp.vue', 'ImageViewerApp.vue', 'RemoteViewApp.vue']
+const REQUIRED_ROOTS = ['App.vue', 'SettingsApp.vue', 'CaptureApp.vue', 'ImageViewerApp.vue', 'RemoteViewApp.vue', 'AgentsApp.vue', 'BoardGameApp.vue']
 const DEFAULT_MAX_BOOTSTRAP_BYTES = 200 * 1024
 const DEFAULT_ROOT_BUDGETS = {
+  // 独立扩展窗只依赖 Vue、共享主题与纯规则，不引入主窗完整组件树。
+  'AgentsApp.vue': { js: 128 * 1024, css: 16 * 1024 },
+  'BoardGameApp.vue': { js: 128 * 1024, css: 16 * 1024 },
   'RemoteViewApp.vue': { js: 128 * 1024, css: 16 * 1024 },
   // 主窗（决议 #284）：文件柜进主窗后带来 NSelect 与两块视图，静态闭包较 v0.49 抬了约 150 KiB。
   // 不改用动态 import——App 内再套动态 import 会让 Rollup 把 App 的 facade 并进匿名共享块，
@@ -142,7 +145,7 @@ export function checkRendererBundles({
     .map(({ item }) => item.file)
     .filter((file) => typeof file === 'string' && file.length > 0)
   if (rootFiles.length === REQUIRED_ROOTS.length && new Set(rootFiles).size !== rootFiles.length) {
-    errors.push('五个根组件的输出文件必须互异')
+    errors.push('所有根组件的输出文件必须互异')
   }
 
   const countedFiles = new Set()
@@ -183,7 +186,7 @@ function main() {
     process.exitCode = 1
     return
   }
-  console.log(`[renderer-bundles] 五入口检查通过，公共启动闭包 ${result.bootstrapBytes} 字节`)
+  console.log(`[renderer-bundles] 七入口检查通过，公共启动闭包 ${result.bootstrapBytes} 字节`)
   for (const rootName of REQUIRED_ROOTS) {
     const sizes = result.roots[rootName]
     console.log(`[renderer-bundles] ${rootName} 完整静态闭包 JS ${sizes.js} 字节 / CSS ${sizes.css} 字节`)

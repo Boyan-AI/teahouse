@@ -1,9 +1,9 @@
 /** @ 成员面板的纯逻辑：过滤、键盘高亮步进、令牌范围判定（决议 #318）。 */
 
-/** @所有人 的候选匹配词：查询命中其一才在面板出现，避免默认高亮误发全员提醒（决议 #318） */
-const MENTION_ALL_QUERIES = ['所有人', '全体', 'all', 'everyone']
+/** 全体候选置顶的完整查询词；空查询的可见入口由调用方放到末尾，避免默认广播。 */
+const MENTION_ALL_QUERIES = ['所有人', '全体', '全体成员', 'all', 'everyone']
 
-/** 当前查询是否应展示「所有人」候选 */
+/** 当前查询是否明确命中全体候选，供调用方将其置顶。 */
 export function matchesMentionAll(query: string): boolean {
   const keyword = query.trim().toLowerCase()
   if (!keyword) return false

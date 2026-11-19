@@ -104,6 +104,8 @@ xattr -dr com.apple.quarantine /Applications/Teahouse.app
 5. **Image viewing & text recognition**: Double-click an image in chat to open the standalone viewer, use the side arrows to navigate session image history, or click "Recognize Text" to select and copy text directly from the image.
 6. Allow the application through the operating-system firewall when prompted. Default ports are UDP `17878` and TCP `17879`.
 
+**Group shortcuts:** Type `@` to choose a member; “Everyone” appears after the member list. Type `@all`, `@everyone`, or the Chinese equivalents to move it to the top. Select the candidate to attach a real mention; typing the label alone does not notify everyone. Older clients may not recognize everyone mentions, so keep group members on compatible versions. Click another member's avatar in a group message or the member list to mention them or start a direct chat. Former members cannot be mentioned, and unknown contacts have no direct-chat action. Your own ordinary messages display the nickname and avatar from your profile settings.
+
 ## How it works
 
 Each client is an equal peer (P2P), with **no central server**:
@@ -176,3 +178,28 @@ If the app cannot open, retrieve `.jsonl` files from `logs`, not the complete da
 | macOS | `~/Library/Application Support/茶话间/logs` |
 
 Development instances use `PANTRY_USER_DATA/logs` when overridden. Restarted apps can export retained previous-run records. An unclean marker does not establish a crash cause; native crashes/power loss may leave no stack. If logging fails, bounded in-memory records last until exit and the summary reports persistence errors. Packaging runs only during export, with no per-frame logging or continuous performance monitoring.
+
+
+## LAN Agents and board-game PK
+
+### Create an Agent in the app
+
+Click **AI** beside the contact search field to open **Agent manager**. Enter a name, persona, LAN service base URL, model ID and API key, then enable and save. Leave the key blank when editing to keep it; disable and save to stop hosting. Up to 8 Agents can be configured.
+
+- The service must implement the **Anthropic Messages-compatible API**. For example, `http://192.168.1.10:8000` is called at `/v1/messages`. A proxy prefix is allowed; do not include `/v1` or `/v1/messages` in the base URL.
+- Only literal IPv4 addresses in private `10/8`, `172.16/12`, `192.168/16` or loopback `127/8` ranges are allowed. Public addresses, domains, URL credentials and redirects are rejected. HTTPS certificates are verified. HTTP is unencrypted; use only on a trusted LAN.
+- Each Agent has a stable independent peer identity. Chat directly or invite it using the existing group-member controls. Group replies require an explicit mention of that Agent; `@Everyone` alone and other Agents do not trigger replies. Removing it from a group uses existing group permissions.
+- The creator's app hosts the Agent. Closing the management or board window does not stop it. Disabling, deleting, quitting or sleeping cancels pending requests; enabled Agents restart on resume. Deleting keeps previous chat history and offline contact records rather than erasing other clients' data.
+- Keys are never placed in peer profiles, group metadata, logs or UI lists. System-encrypted storage is used when available on macOS/Windows. When the secure backend cannot be verified, including current Electron22 Linux setups, keys stay only in memory and must be re-entered after restart. Configuration, personas and an independent Agent chat database remain on the host device.
+- Only direct messages, explicit group mentions and a bounded reply context are sent to the model—not the entire unmentioned group history. Each Agent processes requests serially: 8 queued requests, 32 contexts, 12 context messages, a 60-second total deadline, 1024 output tokens, a 64-KiB response body limit and 4096 UTF-8 bytes per chat reply. No tool execution, web search or autonomous background actions are provided.
+- Model calls are refused when SDK `DEBUG=true` would expose request data and keys. User-visible failures are sanitized.
+
+### Gomoku and Chinese chess
+
+In a direct or group conversation, choose **Gomoku** or **Chinese chess** from **PK**. The creator opens an independent board; recipients click an invitation card to join. At least one online peer with board-game support is required. Older clients are never forced to open a window.
+
+- Join as a spectator, then choose a black/white or red/black seat. Play starts when both seats are occupied. Full rooms accept spectators only, who cannot move. Access is limited to the original direct-message peers or current group members.
+- Gomoku: 15×15, no forbidden moves, five or more in a row wins. Xiangqi validates horse legs, elephant eyes, river/palace boundaries, cannon screens, facing generals and self-check. Checkmate and stalemate both lose. Threefold repetition with the same side to move draws; tournament perpetual-check/chase adjudication is not implemented.
+- Leaving a seat or closing the board during play asks for confirmation and counts as resignation. Both seated players can ready up for another game. Spectators can close their window without affecting play.
+- The host arbitrates seats and moves. The main process checks stale/replayed requests, seat races and spectator permissions. Rooms end when the host quits or is declared offline; host migration is not supported. Rooms expire after two hours, with at most 32 retained rooms per client.
+- Invitations stay in chat history but must pass live-room and membership checks when reopened; ended rooms cannot be restored. Existing dice and rock–paper–scissors PK remain unchanged.

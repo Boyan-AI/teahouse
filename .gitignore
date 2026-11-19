@@ -35,3 +35,6 @@ docs/*
 !docs/en/**
 AGENTS.md
 CLAUDE.md
+
+# 本地源码索引
+.codegraph/

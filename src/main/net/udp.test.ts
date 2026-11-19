@@ -69,3 +69,22 @@ describe('UdpChannel 限速桶', () => {
     expect(internals.buckets.has('127.0.0.1')).toBe(true)
   })
 })
+
+it('立即停止仍会发完已提交的退出公告，关闭后拒绝新发送', async () => {
+  const sender = new UdpChannel({ port: 0, bindAddress: '127.0.0.1', broadcastTargets: [] })
+  const receiver = new UdpChannel({ port: 0, bindAddress: '127.0.0.1', broadcastTargets: [] })
+  try {
+    await Promise.all([sender.start(), receiver.start()])
+    const received = vi.fn()
+    receiver.on('envelope', received)
+    const exit = makeEnvelope(MSG_TYPES.exit, 'leaving-agent', {})
+    sender.send(exit, '127.0.0.1', receiver.port)
+    await sender.stop()
+    sender.send(exit, '127.0.0.1', receiver.port)
+    await vi.waitUntil(() => received.mock.calls.length === 1)
+    expect(received).toHaveBeenCalledTimes(1)
+    expect(received.mock.calls[0][0]).toEqual(exit)
+  } finally {
+    await Promise.all([sender.stop(), receiver.stop()])
+  }
+})

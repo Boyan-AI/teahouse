@@ -3,6 +3,7 @@ import { formatTemplate } from '../../i18n'
 import { parseScreenRecord, type ScreenRecord } from '../../shared/remote-view'
 import type DatabaseT from 'better-sqlite3'
 import type { FileRefView, MessageView, PkRefView } from '../../shared/ipc'
+import { isBoardInvite } from '../../shared/board-games'
 import { parsePkRef } from '../../shared/pk'
 import { toFtsTokens } from './fts'
 
@@ -50,7 +51,7 @@ export function msgRowToView(row: MsgRow): MessageView {
   }
 }
 
-export function messagePreview(row: Pick<MsgRow, 'kind' | 'content' | 'file_ref'>): Pick<MessageView, 'kind' | 'text' | 'fileRef' | 'pkRef' | 'systemRef' | 'screenRef'> {
+export function messagePreview(row: Pick<MsgRow, 'kind' | 'content' | 'file_ref'>): Pick<MessageView, 'kind' | 'text' | 'fileRef' | 'pkRef' | 'systemRef' | 'screenRef' | 'boardRef'> {
   let fileRef: FileRefView | undefined
   let pkRef: PkRefView | undefined
   if (row.kind === 'pk') {
@@ -62,6 +63,10 @@ export function messagePreview(row: Pick<MsgRow, 'kind' | 'content' | 'file_ref'
     } catch {
       fileRef = undefined
     }
+  }
+  let boardRef: MessageView['boardRef']
+  if (row.kind === 'text' && row.file_ref) {
+    try { const raw: unknown = JSON.parse(row.file_ref); if (isBoardInvite(raw)) boardRef = raw } catch { /* 损坏历史退回普通文字。 */ }
   }
   const systemRef = row.kind === 'system' ? parseSystemMessage(row.file_ref) : undefined
   const screenRef = row.kind === 'system' ? parseScreenRecord(row.file_ref) : undefined
@@ -77,6 +82,7 @@ export function messagePreview(row: Pick<MsgRow, 'kind' | 'content' | 'file_ref'
     text: row.content,
     fileRef,
     pkRef,
+    ...(boardRef ? { boardRef } : {}),
     ...(screenRef ? { screenRef } : {}),
     ...(systemRef ? { systemRef } : {})
   }

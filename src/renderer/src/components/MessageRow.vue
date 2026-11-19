@@ -7,12 +7,13 @@ import type { PkGame } from '../../../shared/pk'
 import { splitEmojiText } from '../utils/compat-emoji'
 import { messageStatusHint, shouldShowSeparator, textParts } from '../utils/message-row'
 import { separatorTime } from '../utils/time'
-import AvatarMark from './AvatarMark.vue'
+import MemberAvatar from './MemberAvatar.vue'
 import CompatEmoji from './CompatEmoji.vue'
 import FileCard from './FileCard.vue'
 import ImageBubble from './ImageBubble.vue'
 import PantryIcon from './PantryIcon.vue'
 import PkBubble from './PkBubble.vue'
+import BoardGameInvite from './BoardGameInvite.vue'
 import ScreenHistoryCard from './ScreenHistoryCard.vue'
 import { useChatStore } from '../stores/chat'
 import { usePeersStore } from '../stores/peers'
@@ -24,6 +25,8 @@ const props = defineProps<{
   senderName: string
   senderAvatar: number
   senderAvatarHash: string
+  canMentionSender: boolean
+  canOpenSenderChat: boolean
   highlighted: boolean
   canSendPk: boolean
   pkDisabledReason: string
@@ -38,16 +41,14 @@ const emit = defineEmits<{
   'participate-pk': [game: PkGame]
   resend: [msgId: string]
   'reply-to': [msgId: string]
+  'mention-member': [nodeId: string]
+  'open-member-chat': [nodeId: string]
 }>()
 
 const showSeparator = computed(() => shouldShowSeparator(props.msg.ts, props.prevTs))
-const showGroupSender = computed(
-  () =>
-    props.isGroupConv &&
-    !props.msg.isMine &&
-    props.msg.kind !== 'system' &&
-    props.msg.status !== 'recalled'
-)
+/** 普通消息显示头像；群消息及本人消息显示昵称，系统提示不伪装成聊天成员。 */
+const showSender = computed(() => props.msg.kind !== 'system' && props.msg.status !== 'recalled')
+const showSenderName = computed(() => showSender.value && (props.isGroupConv || props.msg.isMine))
 const parts = computed(() => textParts(props.msg.text))
 const statusHint = computed(() => messageStatusHint(props.msg.kind, props.msg.status))
 
@@ -129,17 +130,21 @@ const replyMeta = computed((): ReplyMeta => {
     v-else-if="props.msg.status !== 'recalled'"
     :id="`msg-${props.msg.id}`"
     class="row"
-    :class="[props.msg.isMine ? 'mine' : 'peer', { highlight: props.highlighted }]"
+    :class="[props.msg.isMine ? 'mine' : 'peer', { highlight: props.highlighted, 'with-sender': showSenderName }]"
   >
-    <AvatarMark
-      v-if="showGroupSender"
+    <MemberAvatar
+      v-if="showSender"
       class="msg-avatar"
       :avatar="props.senderAvatar"
       :avatar-hash="props.senderAvatarHash"
       :name="props.senderName"
+      :can-mention="props.canMentionSender"
+      :can-open-chat="props.canOpenSenderChat"
+      @mention="emit('mention-member', props.msg.senderId)"
+      @open-chat="emit('open-member-chat', props.msg.senderId)"
     />
     <span class="message-stack" :class="{ 'file-stack': props.msg.kind === 'file' }">
-      <span v-if="showGroupSender" class="sender">{{ props.senderName }}</span>
+      <span v-if="showSenderName" class="sender">{{ props.senderName }}</span>
       <ScreenHistoryCard v-if="props.msg.screenRef" :record="props.msg.screenRef" />
       <FileCard
         v-else-if="props.msg.kind === 'file'"
@@ -156,6 +161,7 @@ const replyMeta = computed((): ReplyMeta => {
         @forward="emit('forward', props.msg)"
         @recall="emit('recall', props.msg)"
       />
+      <BoardGameInvite v-else-if="props.msg.boardRef" :invite="props.msg.boardRef" class="bubble message-surface" />
       <PkBubble
         v-else-if="props.msg.kind === 'pk'"
         :msg="props.msg"
@@ -288,6 +294,8 @@ const replyMeta = computed((): ReplyMeta => {
   font-size: 13px;
   flex: 0 0 30px;
   align-self: flex-start;
+}
+.row.with-sender .msg-avatar {
   margin-top: 18px;
 }
 .message-stack {

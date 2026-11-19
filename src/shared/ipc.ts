@@ -1,3 +1,5 @@
+import type { AgentInput, AgentView } from './agents'
+import type { BoardAction, BoardGame, BoardInvite, BoardView } from './board-games'
 import type { Language, SystemMessage } from './i18n'
 import type { ScanRangeImportOutcome } from './cidr'
 // IPC 契约：main 与 renderer 之间唯一的对话词汇表（tech-design §4）。
@@ -8,6 +10,9 @@ import type { PkGame, PkRefView } from './pk'
 import type { ScreenAvailability, ScreenState, ScreenSource, ScreenMode, ScreenImage, ScreenSample, ScreenRequestResult } from './remote-view'
 
 export const IpcChannels = {
+  agentsOpen: 'agents:open', agentsList: 'agents:list', agentsSave: 'agents:save', agentsRemove: 'agents:remove',
+  boardCreate: 'board:create', boardOpen: 'board:open', boardView: 'board:view', boardAction: 'board:action',
+
   diagnosticsExport: 'diagnostics:export',
   diagnosticsCopy: 'diagnostics:copy',
   diagnosticsReveal: 'diagnostics:reveal',
@@ -139,6 +144,8 @@ export const IpcChannels = {
 
 /** main → renderer 的事件推送 */
 export const IpcEvents = {
+  agentsChanged: 'agents:changed', boardChanged: 'board:changed',
+
   screenState: 'screen:state',
   screenSample: 'screen:sample',
   screenImage: 'screen:image',
@@ -310,6 +317,7 @@ export interface MessageView {
   fileRef?: FileRefView
   pkRef?: PkRefView
   systemRef?: SystemMessage
+  boardRef?: BoardInvite
   screenRef?: import('./remote-view').ScreenRecord
   ts: number
   seq: number
@@ -783,6 +791,17 @@ export interface CaptureFailureNotice {
 
 /** preload 经 contextBridge 暴露到 window.pantry 的 API 形状 */
 export interface PantryApi {
+  openAgents(): Promise<void>
+  listAgents(): Promise<AgentView[]>
+  saveAgent(input: AgentInput): Promise<{ ok: boolean; error?: string }>
+  removeAgent(id: string): Promise<boolean>
+  onAgentsChanged(listener: (views: AgentView[]) => void): () => void
+  createBoardGame(convId: string, game: BoardGame): Promise<boolean>
+  openBoardGame(invite: BoardInvite): Promise<boolean>
+  getBoardGame(roomId: string): Promise<BoardView | null>
+  actBoardGame(roomId: string, action: BoardAction): Promise<boolean>
+  onBoardGame(listener: (view: BoardView) => void): () => void
+
   requestScreen(peerId: string, focusOnly?: boolean): Promise<ScreenRequestResult>
   getScreenSources(sessionId: string): Promise<ScreenSource[]>
   respondScreen(sessionId: string, accepted: boolean, sourceId?: string): Promise<boolean>

@@ -60,6 +60,7 @@ describe('@ 成员面板纯逻辑', () => {
     expect(matchesMentionAll('所')).toBe(false)
     expect(matchesMentionAll('所有人')).toBe(true)
     expect(matchesMentionAll('全体')).toBe(true)
+    expect(matchesMentionAll('全体成员')).toBe(true)
     expect(matchesMentionAll('all')).toBe(true)
     expect(matchesMentionAll('ALL')).toBe(true)
     expect(matchesMentionAll('every')).toBe(false)

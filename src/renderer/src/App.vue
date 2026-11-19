@@ -69,6 +69,9 @@ async function chatWith(nodeId: string): Promise<void> {
   tab.value = 'chat'
 }
 
+/** 管理界面使用独立窗口，不增加主窗表单依赖。 */
+function openAgents(): void { void window.pantry.openAgents() }
+
 function openSettings(event?: Event): void {
   releaseRailFocus(event)
   void window.pantry.openSettings()
@@ -605,6 +608,7 @@ onUnmounted(() => {
           <PantryIcon name="send-many" :size="16" />
         </button>
         -->
+        <NButton class="new-group" size="small" :title="tr('Agent 管理')" :aria-label="tr('Agent 管理')" @click="openAgents">AI</NButton>
         <NButton
           class="new-group"
           size="small"

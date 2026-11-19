@@ -42,6 +42,7 @@ import {
 import { isShareDenyReason } from '../../shared/protocol'
 import { isAvatarHash } from '../../shared/protocol'
 import { PEERS_PER_PACKET } from '../../shared/protocol'
+import { isBoardPacket } from '../../shared/board-games'
 import { isPkGame, isPkRef } from '../../shared/pk'
 import { normalizeCidr } from './cidr'
 
@@ -113,6 +114,7 @@ export function validateProfile(p: unknown): p is Profile {
 
 function validatePayload(type: string, payload: unknown, textLimit = TEXT_UDP_LIMIT): boolean {
   switch (type) {
+    case MSG_TYPES.board: return isBoardPacket(payload)
     case MSG_TYPES.screen: {
       if (!isRecord(payload) || !isScreenSessionId(payload.sessionId)) return false
       const keys = Object.keys(payload)

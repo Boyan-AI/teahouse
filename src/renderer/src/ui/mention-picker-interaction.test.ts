@@ -15,7 +15,8 @@ const functions = new Set([
   'inputSelectionRange', 'focusInput', 'setInputSelection', 'mentionLabel', 'send',
   'openMentionFromInsertion', 'closeMentionPicker', 'syncMentionQuery',
   'scrollMentionActiveIntoView', 'moveMentionActive', 'confirmMention',
-  'onKeydown', 'onInputCompositionStart', 'onInputCompositionEnd', 'insertMention'
+  'onKeydown', 'onInputCompositionStart', 'onInputCompositionEnd', 'insertMention',
+  'applyMention', 'mentionMember', 'canMentionMember'
 ])
 const actual = ast.statements.filter(statement =>
   (ts.isFunctionDeclaration(statement) && functions.has(statement.name?.text ?? '')) ||
@@ -34,17 +35,19 @@ function harness() {
     const mentionActiveIndex = ref(0), mentionPickerEl = ref(null), mentionIds = ref([]);
     const inputComposing = ref(false), isGroup = ref(true), canSend = ref(true), overLimit = ref(false);
     const replyToId = ref(null), tablePasteHint = ref(null), settings = ref({ sendKey: 'enter' });
-    const mentionMembers = ref(['alice', 'bob']);
+    const mentionMembers = ref(['alice', 'bob']), showMembers = ref(false);
+    const group = ref({ members: ['self', 'alice', 'bob'] });
     const names = { alice: 'Alice', bob: 'Bob' };
     const peersStore = { nameOf: id => names[id], byId: id => ({ nick: names[id], remark: '' }) };
     const tr = text => text, syncInputMirrorScroll = () => {}, tablePasteHintIntact = () => true;
     const clearTablePasteHint = () => {}, insertNewline = () => { draft.value += '\\n' };
     const attachments = usePendingAttachments(), sendDisabled = computed(() => attachments.busy.value || !draft.value.trim());
     const submitAttachment = async () => true;
-    const sent = [], chatStore = { activeConvId: 'test', send: async (...args) => { sent.push(args); return true } };
+    const sent = [], chatStore = { selfId: 'self', activeConvId: 'test', send: async (...args) => { sent.push(args); return true } };
     ${actual}
     return { draft, inputEl, showMentionPicker, mentionCandidates, mentionIds, mentionActiveIndex,
       settings, sent, chatStore, attachments, onKeydown, insertMention, syncMentionQuery, send,
+      mentionMember, showMembers, group, canSend, isGroup,
       onInputCompositionStart, onInputCompositionEnd, setInputSelection };
   `, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText
   const h = new Function('deps', compiled)({ ref, computed, watch, nextTick, isImeCompositionKey, usePendingAttachments, ...picker })
@@ -64,6 +67,57 @@ function harness() {
 }
 
 describe('提及真实事件函数回归', () => {
+  // 头像入口执行真实组件函数，验证无需先输入 @，且保留正文与身份标记。
+  it('头像提及在选区插入并关闭成员面板，发送携带成员 ID', async () => {
+    const h = harness()
+    await h.edit('前文 选中 后文', 3, 5)
+    h.showMembers.value = true
+    h.mentionMember('bob')
+    await nextTick()
+    expect(h.draft.value).toBe('前文 @Bob  后文')
+    expect(h.mentionIds.value).toEqual(['bob'])
+    expect(h.showMembers.value).toBe(false)
+    expect(h.inputEl.value.selectionStart).toBe(8)
+    h.key('Enter')
+    await nextTick()
+    expect(h.sent[0]).toEqual(['前文 @Bob  后文', ['bob'], undefined])
+  })
+
+  // 自己、已离群成员、非群会话和输入法组合中均不得执行提及。
+  it('头像提及执行时复核成员资格和发言状态', async () => {
+    const h = harness()
+    await h.edit('正文')
+    h.mentionMember('self')
+    h.mentionMember('ghost')
+    h.canSend.value = false
+    h.mentionMember('alice')
+    h.canSend.value = true
+    h.isGroup.value = false
+    h.mentionMember('alice')
+    h.isGroup.value = true
+    h.onInputCompositionStart()
+    h.mentionMember('alice')
+    expect(h.draft.value).toBe('正文')
+    expect(h.mentionIds.value).toEqual([])
+  })
+
+  // 展示全体入口不等于选择全体，只有显式确认才附带广播标记。
+  it('输入 @ 后 Enter 默认提及成员，鼠标选择全体才广播', async () => {
+    const h = harness()
+    await h.edit('@')
+    h.key('Enter')
+    await nextTick()
+    expect(h.draft.value).toBe('@Alice ')
+    expect(h.mentionIds.value).toEqual(['alice'])
+    await h.edit('')
+    await h.edit('@')
+    h.insertMention('@all')
+    await nextTick()
+    h.key('Enter')
+    await nextTick()
+    expect(h.sent[0]).toEqual(['@所有人', ['@all'], undefined])
+  })
+
   it('keydown 之后左移出令牌，下一次 Enter 不使用旧候选', async () => {
     const h = harness()
     await h.edit('@')
@@ -115,11 +169,13 @@ describe('提及真实事件函数回归', () => {
     expect(h.showMentionPicker.value).toBe(false)
   })
 
-  it('方向键循环选择，短查询不抢占单人候选，明确输入才能选择全员', async () => {
+  it('空查询全体入口排末尾，方向键可显式选择，短查询不抢占单人候选', async () => {
     const h = harness()
     await h.edit('@')
+    expect(h.mentionCandidates.value).toEqual(['alice', 'bob', '@all'])
+    expect(h.mentionActiveIndex.value).toBe(0)
     h.key('ArrowUp')
-    expect(h.mentionActiveIndex.value).toBe(1)
+    expect(h.mentionActiveIndex.value).toBe(2)
     h.key('ArrowDown')
     expect(h.mentionActiveIndex.value).toBe(0)
     await h.edit('@a')

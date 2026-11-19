@@ -24,7 +24,9 @@ function createFixture(transform = (manifest) => manifest) {
         'src/SettingsApp.vue',
         'src/CaptureApp.vue',
         'src/ImageViewerApp.vue',
-        'src/RemoteViewApp.vue'
+        'src/RemoteViewApp.vue',
+        'src/AgentsApp.vue',
+        'src/BoardGameApp.vue'
       ]
     },
     '_vendor.js': { file: 'assets/vendor.js' },
@@ -54,6 +56,8 @@ function createFixture(transform = (manifest) => manifest) {
     'src/RemoteViewApp.vue': {
       file: 'assets/RemoteViewApp.js', src: 'src/RemoteViewApp.vue', isDynamicEntry: true
     },
+    'src/AgentsApp.vue': { file: 'assets/AgentsApp.js', src: 'src/AgentsApp.vue', isDynamicEntry: true },
+    'src/BoardGameApp.vue': { file: 'assets/BoardGameApp.js', src: 'src/BoardGameApp.vue', isDynamicEntry: true },
     '_shared.js': { file: 'assets/shared.js', css: ['assets/shared.css'] }
   })
 
@@ -68,7 +72,7 @@ function createFixture(transform = (manifest) => manifest) {
 }
 
 describe('checkRendererBundles', () => {
-  it('五个动态入口独立可达且公共启动闭包未超限时通过', () => {
+  it('七个动态入口独立可达且公共启动闭包未超限时通过', () => {
     const { outDir } = createFixture()
 
     expect(checkRendererBundles({ outDir, maxBootstrapBytes: 200 })).toEqual({
@@ -79,7 +83,9 @@ describe('checkRendererBundles', () => {
         'SettingsApp.vue': { js: 140, css: 7 },
         'CaptureApp.vue': { js: 120, css: 0 },
         'ImageViewerApp.vue': { js: 120, css: 0 },
-        'RemoteViewApp.vue': { js: 120, css: 0 }
+        'RemoteViewApp.vue': { js: 120, css: 0 },
+        'AgentsApp.vue': { js: 120, css: 0 },
+        'BoardGameApp.vue': { js: 120, css: 0 }
       }
     })
   })

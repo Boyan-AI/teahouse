@@ -362,8 +362,7 @@ const mentionMembers = computed(() =>
 function mentionLabel(id: string): string {
   return id === MENTION_ALL ? tr('所有人') : peersStore.nameOf(id)
 }
-// 键盘导航 + 实时过滤（决议 #318）：按备注与昵称做包含匹配，显示名（备注优先）不变；
-// @所有人（决议 #318）仅在查询命中「所有人 / 全体 / all / everyone」时作为首项出现
+// 空查询时将全体入口放在成员末尾，默认 Enter 仍提及首位真实成员；明确搜索全体关键词才置顶。
 const mentionCandidates = computed(() => {
   const members = filterMentionCandidates(
     mentionMembers.value,
@@ -373,7 +372,8 @@ const mentionCandidates = computed(() => {
     },
     mentionQuery.value
   )
-  return matchesMentionAll(mentionQuery.value) ? [MENTION_ALL, ...members] : members
+  if (matchesMentionAll(mentionQuery.value)) return [MENTION_ALL, ...members]
+  return mentionQuery.value.trim() ? members : [...members, MENTION_ALL]
 })
 const inputPlaceholder = computed(() => {
   if (!canSend.value) return tr('你已不在该讨论组，无法发言')
@@ -611,16 +611,36 @@ watch(
   }
 )
 
+/** 本人不在联系人列表中，消息资料从已订阅更新的个人设置读取。 */
 function senderName(msg: MessageView): string {
-  return peersStore.nameOf(msg.senderId)
+  return msg.isMine ? chatStore.selfNick || tr('我') : peersStore.nameOf(msg.senderId)
 }
 
+/** 动物头像与首字头像均保留本人设置，不回退为未知联系人。 */
 function senderAvatar(msg: MessageView): number {
-  return peersStore.byId(msg.senderId)?.avatar ?? -1
+  return msg.isMine ? chatStore.selfAvatar : peersStore.byId(msg.senderId)?.avatar ?? -1
 }
 
+/** 自定义头像使用现有受管图片协议，不引入远程图片。 */
 function senderAvatarHash(msg: MessageView): string {
-  return peersStore.byId(msg.senderId)?.avatarHash ?? ''
+  return msg.isMine ? chatStore.selfAvatarHash : peersStore.byId(msg.senderId)?.avatarHash ?? ''
+}
+
+/** 只允许提及当前群内其他成员，历史上已离群的发言者不可再提及。 */
+function canMentionMember(nodeId: string): boolean {
+  return isGroup.value && canSend.value && nodeId !== chatStore.selfId &&
+    Boolean(group.value?.members.includes(nodeId))
+}
+
+/** 私聊沿用已知联系人的身份，不创建未知节点或本人的空会话。 */
+function canOpenMemberChat(nodeId: string): boolean {
+  return isGroup.value && nodeId !== chatStore.selfId && Boolean(peersStore.byId(nodeId))
+}
+
+/** 头像菜单复用现有私聊导航，原群聊草稿由 store 保留。 */
+async function openMemberChat(nodeId: string): Promise<void> {
+  if (!canOpenMemberChat(nodeId)) return
+  await chatStore.openPeer(nodeId)
 }
 
 const draftBytes = computed(() => new TextEncoder().encode(draft.value.trim()).length)
@@ -1236,6 +1256,13 @@ async function sendNudge(): Promise<void> {
   }
 }
 
+/** 新棋局沿用当前会话权限；只有创建者开窗，对方收到可主动进入的邀请。 */
+async function createBoard(game: 'gomoku' | 'xiangqi'): Promise<void> {
+  if (!canSend.value || !chatStore.activeConvId) return
+  showPk.value = false
+  if (!await window.pantry.createBoardGame(chatStore.activeConvId, game)) alert(tr('无法创建棋局：需要支持新版棋盘的在线成员，或房间数量已达上限'))
+}
+
 async function sendPk(game: PkGame): Promise<void> {
   if (!canSendPk.value) return
   showPk.value = false
@@ -1351,14 +1378,28 @@ function onInputCompositionEnd(): void {
   inputComposing.value = false
 }
 
+/** 候选确认前再次复核光标令牌，避免覆盖候选之外的正文。 */
 function insertMention(nodeId: string): void {
   if (inputComposing.value) return
   syncMentionQuery()
   if (!showMentionPicker.value || !mentionCandidates.value.includes(nodeId)) return
-  const name = mentionLabel(nodeId)
   const at = pendingMentionAt.value ?? draft.value.length
   // 光标在查询串中间时替换整个令牌，保留其后的空白与正文。
   const end = at + 1 + (draft.value.slice(at + 1).match(/^\S*/)?.[0].length ?? 0)
+  applyMention(nodeId, at, end)
+}
+
+/** 头像提及从当前选区插入，不依赖先输入 @ 或打开候选。 */
+function mentionMember(nodeId: string): void {
+  if (!canMentionMember(nodeId) || inputComposing.value) return
+  const { start, end } = inputSelectionRange()
+  showMembers.value = false
+  applyMention(nodeId, start, end)
+}
+
+/** 两个提及入口共用文本、身份标记及兼容编辑器光标恢复逻辑。 */
+function applyMention(nodeId: string, at: number, end: number): void {
+  const name = mentionLabel(nodeId)
   draft.value = `${draft.value.slice(0, at)}@${name} ${draft.value.slice(end)}`
   mentionIds.value = [...new Set([...mentionIds.value, nodeId])]
   closeMentionPicker()
@@ -2087,6 +2128,8 @@ async function onDrop(event: DragEvent): Promise<void> {
       v-if="isGroup && showMembers && group"
       :group="group"
       :self-id="chatStore.selfId"
+      @mention-member="mentionMember"
+      @open-member-chat="openMemberChat"
       @close="showMembers = false"
     />
 
@@ -2103,11 +2146,15 @@ async function onDrop(event: DragEvent): Promise<void> {
         :sender-name="senderName(msg)"
         :sender-avatar="senderAvatar(msg)"
         :sender-avatar-hash="senderAvatarHash(msg)"
+        :can-mention-sender="canMentionMember(msg.senderId)"
+        :can-open-sender-chat="canOpenMemberChat(msg.senderId)"
         :highlighted="msg.id === chatStore.highlightId"
         :can-send-pk="canSendPk"
         :pk-disabled-reason="pkDisabledReason"
         :recall-visible="isRecallableKind(msg)"
         :recall-disabled-reason="mediaRecallDisabledReason(msg)"
+        @mention-member="mentionMember"
+        @open-member-chat="openMemberChat"
         @contextmenu="openMessageMenu"
         @forward="forwardMsg = $event"
         @recall="recallMessage"
@@ -2183,6 +2230,8 @@ async function onDrop(event: DragEvent): Promise<void> {
         </span>
         <span ref="pkScope" class="pk-scope">
           <div v-if="showPk" class="pk-popover">
+            <button type="button" :disabled="!canSend" @click="createBoard('gomoku')"><span class="pk-pop-window">●</span><span>{{ tr('五子棋') }}</span></button>
+            <button type="button" :disabled="!canSend" @click="createBoard('xiangqi')"><span class="pk-pop-window">{{ tr('将') }}</span><span>{{ tr('中国象棋') }}</span></button>
             <button
               type="button"
               :disabled="!canSendPk"

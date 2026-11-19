@@ -14,7 +14,7 @@ import {
   type GroupAdminAction
 } from '../utils/group-admin'
 import PantryIcon from './PantryIcon.vue'
-import AvatarMark from './AvatarMark.vue'
+import MemberAvatar from './MemberAvatar.vue'
 import AvatarCropDialog from './AvatarCropDialog.vue'
 import GroupAvatar from './GroupAvatar.vue'
 import GroupInviteDialog from './GroupInviteDialog.vue'
@@ -24,7 +24,11 @@ import GroupTextDialog from './GroupTextDialog.vue'
 // 角色权限与管理密码兼容规则统一遵循决议 #241。
 
 const props = defineProps<{ group: GroupView; selfId: string }>()
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{
+  close: []
+  'mention-member': [nodeId: string]
+  'open-member-chat': [nodeId: string]
+}>()
 
 const peersStore = usePeersStore()
 const chatStore = useChatStore()
@@ -303,11 +307,15 @@ async function runUpdate(patch: GroupPatch, failureMessage: string): Promise<boo
     <div v-if="adminFeedback && !textDialogKind" class="admin-feedback">{{ adminFeedback }}</div>
     <ul class="members">
       <li v-for="id in group.members" :key="id">
-        <AvatarMark
+        <MemberAvatar
           class="m-avatar"
           :avatar="avatarOf(id)"
           :avatar-hash="avatarHashOf(id)"
           :name="nameOf(id)"
+          :can-mention="group.amMember && id !== selfId"
+          :can-open-chat="id !== selfId && !!peersStore.byId(id)"
+          @mention="emit('mention-member', id)"
+          @open-chat="emit('open-member-chat', id)"
           :presence="id === selfId ? undefined : ((peersStore.byId(id)?.online ?? false) ? 'online' : 'offline')"
         />
         <span class="nm">{{ nameOf(id) }}</span>

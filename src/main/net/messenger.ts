@@ -41,6 +41,8 @@ interface PendingEntry {
 }
 
 export class Messenger extends EventEmitter {
+  private stopped = false
+  private readonly tcpStops = new Set<() => void>()
   private readonly screenSeen = new Map<string, number>()
   private readonly udp: UdpChannel
   private readonly registry: PeerRegistry
@@ -81,6 +83,7 @@ export class Messenger extends EventEmitter {
   async sendUserMessage(peerId: string, env: Envelope): Promise<SendOutcome> {
     const key = this.queueKey(peerId, env.id)
     const acked = await this.sendAwaitAck(peerId, env)
+    if (this.stopped) return 'queued'
     if (acked) {
       this.cancelledQueued.delete(key)
       return 'sent'
@@ -94,14 +97,22 @@ export class Messenger extends EventEmitter {
   /** 可靠发送但不入队（文件控制报文用——对方离线时直接失败，决议 #4） */
   async sendReliable(peerId: string, env: Envelope, signal?: AbortSignal): Promise<boolean> {
     const acked = await this.sendAwaitAck(peerId, env, signal)
-    if (!acked && !signal?.aborted) this.registry.markOffline(peerId)
+    if (!this.stopped && !acked && !signal?.aborted) this.registry.markOffline(peerId)
     return acked
+  }
+
+  /** 停止重传和 TCP 等待，禁止迟到补发操作访问已关闭的托管数据库。 */
+  stop(): void {
+    this.stopped = true
+    for (const entry of [...this.pending.values()]) entry.settle(false)
+    for (const cancel of [...this.tcpStops]) cancel()
   }
 
   /** 尽力而为单发：不重试、不等 ACK、不改在线状态，丢失由对端超时兜底。
    *  供 avatar miss 等提示型报文使用（决议 #249）——旧端整包忽略且不回 ACK，
    *  走可靠通道会把对端误判为离线，故必须用本方法。仅限 UDP 单包大小。 */
   sendBestEffort(peerId: string, env: Envelope): void {
+    if (this.stopped) return
     const record = this.registry.get(peerId)
     if (!record) return
     const buf = encode(env)
@@ -111,7 +122,7 @@ export class Messenger extends EventEmitter {
 
   /** 对端上线后按原顺序补发；中途再失败即停（保持顺序，等下次上线） */
   async flushQueue(peerId: string): Promise<void> {
-    if (this.flushing.has(peerId)) return
+    if (this.stopped || this.flushing.has(peerId)) return
     this.flushing.add(peerId)
     try {
       for (const item of this.queue.listByPeer(peerId)) {
@@ -126,7 +137,7 @@ export class Messenger extends EventEmitter {
         }
         ;(env.payload as { resend?: boolean }).resend = true
         const acked = await this.sendAwaitAck(peerId, env)
-        if (!acked) break
+        if (this.stopped || !acked) break
         this.queue.remove(item.msgId, peerId)
         this.cancelledQueued.delete(key)
         this.emit('status', item.msgId, 'sent')
@@ -155,6 +166,7 @@ export class Messenger extends EventEmitter {
 
   /** TCP 控制帧入口：复用同一套入站白名单、去重和事件分发。 */
   acceptTcpEnvelope(raw: Envelope, remoteAddress?: string): boolean {
+    if (this.stopped) return false
     const result = decodeTcpEnvelopeObject(raw)
     if (!result.ok || !result.known) return false
     const env = result.env
@@ -162,6 +174,7 @@ export class Messenger extends EventEmitter {
     if (!isReliableControlType(env.type)) {
       return false
     }
+    if (env.type === MSG_TYPES.board && !this.isScreenSource(env.from, remoteAddress)) return false
     if (env.type === MSG_TYPES.screen) {
       if (!this.isScreenSource(env.from, remoteAddress)) return false
       if (!this.seenScreen(env)) this.emit('incoming', env, { address: remoteAddress })
@@ -169,14 +182,14 @@ export class Messenger extends EventEmitter {
     }
     if (this.dedup.has(env.id)) return true
     this.dedup.add(env.id, Date.now())
-    this.emit('incoming', env)
+    this.emit('incoming', env, { address: remoteAddress })
     return true
   }
 
   /** 发送并等待 ACK：按 ackRetrySchedule 退避重发，每次重发都重读对端最新地址。
    *  等待表按 (收件人, 信封 id) 复合键——群消息同一信封并发发往多个成员互不串线（§7.4） */
   private sendAwaitAck(peerId: string, env: Envelope, signal?: AbortSignal): Promise<boolean> {
-    if (signal?.aborted) return Promise.resolve(false)
+    if (this.stopped || signal?.aborted) return Promise.resolve(false)
     const buf = encode(env)
     if (buf.length > UDP_MAX_PAYLOAD) {
       return this.sendTcpAwaitAck(peerId, env, signal)
@@ -223,7 +236,7 @@ export class Messenger extends EventEmitter {
   }
 
   private sendTcpAwaitAck(peerId: string, env: Envelope, signal?: AbortSignal): Promise<boolean> {
-    if (signal?.aborted) return Promise.resolve(false)
+    if (this.stopped || signal?.aborted) return Promise.resolve(false)
     const record = this.registry.get(peerId)
     if (!record) return Promise.resolve(false)
     return new Promise((resolve) => {
@@ -235,9 +248,12 @@ export class Messenger extends EventEmitter {
         settled = true
         clearTimeout(timer)
         signal?.removeEventListener('abort', abort)
+        this.tcpStops.delete(cancel)
         socket.destroy()
         resolve(ok)
       }
+      const cancel = (): void => settle(false)
+      this.tcpStops.add(cancel)
       timer = setTimeout(() => settle(false), 7_000)
       const abort = (): void => settle(false)
       signal?.addEventListener('abort', abort, { once: true })
@@ -275,7 +291,7 @@ export class Messenger extends EventEmitter {
   }
 
   private handle(env: Envelope, rinfo: RemoteInfo): void {
-    if (env.from === this.selfId) return
+    if (this.stopped || env.from === this.selfId) return
 
     if (env.type === MSG_TYPES.ack) {
       const ackFor = (env.payload as AckPayload).ackFor
@@ -335,6 +351,6 @@ function isReliableControlType(type: string): boolean {
     type === MSG_TYPES.avatar ||
     type === MSG_TYPES.update ||
     // 共享文件柜控制面（§8.2）：list-ok 常超 UDP 上限，必须能走 TCP 控制帧兜底
-    type === MSG_TYPES.share || type === MSG_TYPES.screen
+    type === MSG_TYPES.share || type === MSG_TYPES.screen || type === MSG_TYPES.board
   )
 }

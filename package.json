@@ -10,11 +10,13 @@
     "node": ">=18"
   },
   "dependencies": {
-    "better-sqlite3": "9.6.0"
+    "@anthropic-ai/sdk": "0.32.1",
+    "better-sqlite3": "9.6.0",
+    "node-fetch": "2.7.0"
   },
   "scripts": {
-    "postinstall": "node node_modules/@electron/rebuild/lib/cli.js -o better-sqlite3",
-    "rebuild:electron": "node node_modules/@electron/rebuild/lib/cli.js -f -o better-sqlite3",
+    "postinstall": "node scripts/rebuild-electron.cjs",
+    "rebuild:electron": "node scripts/rebuild-electron.cjs --force",
     "dev": "node scripts/prepare-ocr-assets.mjs && electron-vite dev",
     "dev:2": "sh scripts/dev-clients.sh 2",
     "dev:3": "sh scripts/dev-clients.sh 3",
@@ -39,7 +41,8 @@
     "dist:win:ia32": "npm run build && cross-env NO_UPDATE_NOTIFIER=1 electron-builder --win --ia32 --publish never",
     "dist:linux": "npm run build && cross-env NO_UPDATE_NOTIFIER=1 USE_HARD_LINKS=false electron-builder --linux deb:x64 AppImage:x64 --publish never",
     "dist:linux:arm64": "npm run build && cross-env NO_UPDATE_NOTIFIER=1 USE_HARD_LINKS=false electron-builder --linux deb:arm64 AppImage:arm64 --publish never",
-    "dist:mac": "npm run build && cross-env NO_UPDATE_NOTIFIER=1 electron-builder --mac --publish never"
+    "dist:mac": "npm run build && cross-env NO_UPDATE_NOTIFIER=1 electron-builder --mac --publish never",
+    "test:agents": "esbuild src/main/services/agents/selftest.ts --bundle --platform=node --target=node16 --external:better-sqlite3 --external:@anthropic-ai/sdk --external:node-fetch --outfile=out/agent-selftest.cjs --log-level=warning && cross-env ELECTRON_RUN_AS_NODE=1 electron out/agent-selftest.cjs"
   },
   "build": {
     "appId": "com.pantry.app",

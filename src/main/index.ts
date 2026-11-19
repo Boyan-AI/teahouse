@@ -1,3 +1,9 @@
+import { BoardGamesService } from './services/board-games'
+import { isBoardInvite, isBoardAction, boardId, type BoardView } from '../shared/board-games'
+import { isAgentInput } from '../shared/agents'
+import { AgentStore } from './store/agent-store'
+import { AgentManager } from './services/agents/manager'
+import { ExtensionWindows } from './windows/extension-windows'
 import { RangeScanScheduler } from './services/range-scan'
 import { truncateUtf8 } from './util/utf8'
 import { DiagnosticsService, diagnosticEnvironment } from './services/diagnostics'
@@ -17,6 +23,8 @@ import {
   screen,
   shell,
   systemPreferences,
+  safeStorage,
+  powerMonitor,
   type Tray
 } from 'electron'
 import { networkInterfaces } from 'node:os'
@@ -294,6 +302,18 @@ if (!gotLock) {
   let persistTimer: ReturnType<typeof setTimeout> | null = null
   let chat: ChatService | null = null
   let files: FilesService | null = null
+  let boards: BoardGamesService | null = null
+  let agents: AgentManager | null = null
+  let agentInitError = ''
+  const extensionWindows = new ExtensionWindows({ settings: settingsView,
+    mayClose: (key, win) => {
+      const view = boards?.view(key)
+      if (isQuitting || !view || view.room.phase !== 'playing' || !view.room.seats.includes(view.selfId)) return true
+      return dialog.showMessageBoxSync(win, { type: 'question', message: tr('离开棋盘将视为认输，确定离开？'),
+        buttons: [tr('取消'), tr('离开')], defaultId: 0, cancelId: 0 }) === 1
+    },
+    closed: key => { if (key !== 'agents') void boards?.action(key, { kind: 'leave' }) }
+  })
   let groups: GroupsService | null = null
   let groupRepo: GroupRepo | null = null
   let avatars: AvatarService | null = null
@@ -694,6 +714,7 @@ if (!gotLock) {
     const view = settingsView()
     syncMainWindowZoom()
     syncSettingsWindowZoom(view.fontScale)
+    extensionWindows.sync(view)
     for (const win of BrowserWindow.getAllWindows()) {
       win.webContents.send(IpcEvents.settingsUpdated, view)
     }
@@ -1209,6 +1230,7 @@ if (!gotLock) {
       messenger.on('incoming', (env: Envelope, source?: { address: string }) => {
         if (env.type === MSG_TYPES.update) handleUpdateRequest(env as Envelope<UpdateReqPayload>)
         else if (env.type === MSG_TYPES.share) handleShareCtl(env as Envelope<SharePayload>)
+        else if (env.type === MSG_TYPES.board && source && registry?.get(env.from)?.ip === source.address.replace(/^::ffff:/, '')) boards?.receive(env.from, env.payload)
         else if (env.type === MSG_TYPES.screen && source) remoteView.service?.receive(env.from, source.address, env.payload as ScreenPayload)
       })
       remoteView.attach({
@@ -1341,6 +1363,25 @@ if (!gotLock) {
         scheduleAvatarPrune()
       })
 
+      // 邀请复用现有文字消息与 JSON 引用列，不升级已有数据库结构。
+      const boardConvs = new ConvRepo(db)
+      boards = new BoardGamesService({ selfId: state.nodeId, selfName: () => state.config.nick, correctTime: (id, ts) => peerClock.correct(id, ts),
+        peer: id => { const p = registry?.get(id); return p ? { name: resolvePeerDisplayName(id), online: p.online, caps: p.profile.caps } : null },
+        members: id => groupRepo?.get(id)?.members ?? null,
+        send: (id, packet) => messenger!.sendReliable(id, makeEnvelope(MSG_TYPES.board, state.nodeId, packet)),
+        canRestoreInvite: invite => { const row = chatMessages.get('board:' + invite.roomId); return Boolean(row && row.sender_id === invite.hostId && row.file_ref === JSON.stringify(invite)) },
+        inviteMessage: (invite, from, mine, peerId) => {
+          const convId = invite.groupId ? boardConvs.ensureGroup(invite.groupId) : boardConvs.ensureSingle(peerId)
+          const ts = mine ? invite.createdAt : peerClock.correct(from, invite.createdAt)
+          chatMessages.insert({ id: 'board:' + invite.roomId, convId, senderId: from, isMine: mine, kind: 'text',
+            content: invite.game === 'gomoku' ? tr('五子棋邀请') : tr('象棋邀请'), fileRef: JSON.stringify(invite), ts, status: 'sent' })
+          boardConvs.bump(convId, ts); if (!mine) boardConvs.incUnread(convId)
+          const row = chatMessages.get('board:' + invite.roomId); if (row) onMessage(msgRowToView(row))
+          onConvs(chat!.listConversations())
+        }
+      })
+      boards.on('state', (view: BoardView) => extensionWindows.send(view.room.roomId, IpcEvents.boardChanged, view))
+
       avatars = new AvatarService({
         selfId: state.nodeId,
         messenger,
@@ -1406,6 +1447,21 @@ if (!gotLock) {
       await udp.start()
       remoteView.setNetworkReady(tcpReady)
       discovery.start()
+      try {
+        const store = new AgentStore(join(app.getPath('userData'), 'data', 'agents.json'), {
+          // Electron22 无法可靠区分 Linux 明文后端，保守拒绝安全性无法验证的持久化。
+          available: () => process.platform !== 'linux' && safeStorage.isEncryptionAvailable(),
+          encrypt: value => safeStorage.encryptString(value), decrypt: value => safeStorage.decryptString(value)
+        })
+        agents = new AgentManager(store, { dataDir: join(app.getPath('userData'), 'data', 'agents'),
+          profile: () => state.profile,
+          seeds: () => [{ host: '127.0.0.1', port: udp.port }, ...registry!.values().filter(p => p.online).map(p => ({ host: p.ip, port: p.udpPort }))],
+          loopback: Boolean(process.env['PANTRY_SMOKE']) })
+        agents.on('changed', views => extensionWindows.send('agents', IpcEvents.agentsChanged, views))
+        registry!.on('online', id => { const peer = registry?.get(id); if (peer) agents?.probe(peer) })
+        void agents.start().catch(() => { agentInitError = tr('Agent 服务已停止') })
+      } catch { agentInitError = tr('Agent 配置无法读取，未覆盖原文件') }
+
       rangeSync?.start()
       rangeScanner = new RangeScanScheduler({
         discovery, getState: () => appState, onlineCount: () => registry?.onlineCount() ?? 0,
@@ -1680,6 +1736,39 @@ if (!gotLock) {
           address: diagnostics.alias(p.ip), tcpPort: p.profile.tcpPort, online: p.online,
           version: /^\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(p.profile.ver) ? p.profile.ver : 'unknown', platform: p.profile.platform })) : undefined },
       database: databaseMode, diagnostics: diagnostics.status() }
+  })
+
+  ipcMain.handle(IpcChannels.agentsOpen, event => {
+    if (event.sender !== mainWindow?.webContents) return
+    extensionWindows.open('agents', 'agents', tr('Agent 管理'))
+  })
+  ipcMain.handle(IpcChannels.agentsList, event => extensionWindows.owns(event, 'agents') ? agents?.list() ?? [] : [])
+  ipcMain.handle(IpcChannels.agentsSave, async (event, input: unknown) => {
+    if (!extensionWindows.owns(event, 'agents') || !isAgentInput(input)) return { ok: false, error: tr('Agent 配置无效') }
+    if (!agents) return { ok: false, error: agentInitError || tr('网络或数据库尚未就绪') }
+    try { await agents.save(input); return { ok: true } }
+    catch (error) { return { ok: false, error: error instanceof Error ? error.message : tr('保存失败') } }
+  })
+  ipcMain.handle(IpcChannels.agentsRemove, async (event, id: unknown) => {
+    if (!extensionWindows.owns(event, 'agents') || typeof id !== 'string' || !agents) return false
+    try { await agents.remove(id); return true } catch { return false }
+  })
+  ipcMain.handle(IpcChannels.boardCreate, (event, convId: unknown, game: unknown) => {
+    if (event.sender !== mainWindow?.webContents || typeof convId !== 'string' || (game !== 'gomoku' && game !== 'xiangqi') || !boards) return false
+    const target = convId.startsWith('single:') ? convId.slice(7) : ''
+    if (target && !registry?.get(target)) return false
+    const invite = boards.create(convId, game)
+    if (!invite) return false
+    extensionWindows.open(invite.roomId, 'board', tr(game === 'gomoku' ? '五子棋' : '中国象棋')); return true
+  })
+  ipcMain.handle(IpcChannels.boardOpen, async (event, invite: unknown) => {
+    if (event.sender !== mainWindow?.webContents || !isBoardInvite(invite) || !await boards?.open(invite)) return false
+    extensionWindows.open(invite.roomId, 'board', tr(invite.game === 'gomoku' ? '五子棋' : '中国象棋')); return true
+  })
+  ipcMain.handle(IpcChannels.boardView, (event, id: unknown) => typeof id === 'string' && extensionWindows.owns(event, id) ? boards?.view(id) ?? null : null)
+  ipcMain.handle(IpcChannels.boardAction, (event, id: unknown, action: unknown) => {
+    if (!boardId(id) || !extensionWindows.owns(event, id) || !isBoardAction(action)) return false
+    return boards?.action(id, action) ?? false
   })
 
   ipcMain.handle(IpcChannels.appInfo, (): AppInfo => {
@@ -3078,6 +3167,8 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     remoteView.start()
+    powerMonitor.on('suspend', () => { void agents?.pause().catch(() => undefined) })
+    powerMonitor.on('resume', () => { void agents?.resume().catch(() => undefined) })
     void imagePreview.prune()
     const updateCaps = canAdvertiseUpdateSource() ? [CAPS.updateSource] : []
     appState = loadAppState(app.getPath('userData'), app.getVersion(), tcpPort, udpPort, [
@@ -3088,6 +3179,7 @@ if (!gotLock) {
       CAPS.transferWait,
       CAPS.transferAck,
       CAPS.groupRoles,
+      CAPS.boardGames,
       CAPS.avatarImages,
       CAPS.fileCabinet,
       ...updateCaps
@@ -3203,13 +3295,18 @@ if (!gotLock) {
 
   let diagnosticQuit = false
   let diagnosticClosing = false
-  app.on('before-quit', event => {
+  app.on('before-quit', async event => {
     if (diagnosticQuit) return
     event.preventDefault()
     if (diagnosticClosing) return
     diagnosticClosing = true
     remoteView.close()
     isQuitting = true
+    boards?.stop()
+    await agents?.stop()
+    messenger?.stop()
+    // 先让已取消发送的状态回调执行完，再关闭主聊天数据库。
+    await new Promise<void>(resolve => setImmediate(resolve))
     stopTrayUnreadFlash(tray)
     rangeSync?.stop()
     rangeSync = null

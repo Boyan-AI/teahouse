@@ -28,3 +28,12 @@
 
 - Lucide：<https://github.com/lucide-icons/lucide/tree/0.468.0>，ISC License（部分图形源自 Feather / MIT）
 - 完整版权与许可：[navigation-icons.txt](build/licenses/navigation-icons.txt)，随应用打包到 `licenses/navigation-icons.txt`。
+
+
+## 内网模型客户端
+
+Agent 托管使用官方 Anthropic TypeScript SDK 与 Node HTTP fetch 实现，依赖随应用本地打包。默认无云端连接，仅访问用户配置的合规内网模型服务。
+
+- Anthropic SDK：<https://github.com/anthropics/anthropic-sdk-typescript>，版本 0.32.1，MIT License，Copyright 2023 Anthropic, PBC.
+- node-fetch：<https://github.com/node-fetch/node-fetch>，版本 2.7.0，MIT License，Copyright (c) 2016 David Frank.
+- 依赖包内均保留上游许可文件；构建不通过外部 CDN 加载 SDK。

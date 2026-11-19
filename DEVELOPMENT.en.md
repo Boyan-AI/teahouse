@@ -31,12 +31,14 @@ Teahouse is a serverless, IP-based LAN messenger and file-transfer application. 
 
 Review the [hard constraints](CONTRIBUTING.en.md#hard-constraints) before changing runtime code or dependencies.
 
+Native installation and `npm run rebuild:electron` call the same pinned `@electron/rebuild` through its official programmatic API in `scripts/rebuild-electron.cjs`. This avoids the old CLI’s `yargs/yargs` ESM loading failure on Node26. Only `better-sqlite3` is rebuilt, targeting the project’s pinned Electron; force rebuilds and `npm_config_build_from_source=true` remain supported. Neither Electron nor global Node settings are changed.
+
 ## Process model
 
 ```text
 ┌──────────────────────────────────────────────────────────┐
 │ Renderer processes — Chrome 108, Vue 3, Pinia            │
-│ Main UI / Settings / Capture / Image viewer              │
+│ Main / Settings / Capture / Images / Screen / Agents / Board              │
 │ Display and interaction; state projects the main process │
 └────────────────────────────┬─────────────────────────────┘
                              │ window.pantry only
@@ -104,7 +106,7 @@ pantry/
 │  │  └─ windows/          # Tray, Settings, Capture, and Image viewer windows
 │  └─ renderer/
 │     ├─ src/
-│     │  ├─ main.ts        # Hash-based routing to four renderer roots
+│     │  ├─ main.ts        # Hash-based routing to seven renderer roots
 │     │  ├─ App.vue        # Main window and three main tabs
 │     │  ├─ SettingsApp.vue
 │     │  ├─ CaptureApp.vue
@@ -188,3 +190,18 @@ npm run smoke
 Network tests use `127.0.0.1` and empty broadcast targets. Use `npm run dev:2` or `npm run dev:3` for real local discovery, message, and file flows with isolated client data.
 
 Package and lock versions must advance with each complete increment. The GitHub Actions release workflow builds multi-platform installers; after a push to `main` passes all platform and artifact version checks, it creates an annotated version tag and publishes the Release, skipping publication if the tag already exists remotely. Tag-triggered releases remain supported; manual dispatch publishes only on a `v*` tag.
+
+
+## Agent and board-game extension boundaries
+
+- `src/shared/agents.ts` defines the configuration allowlist and literal LAN IPv4 validation. `store/agent-store.ts` atomically stores separate configuration with system-encrypted keys, or memory-only session keys when the secure backend cannot be verified. Existing chat schema is unchanged.
+- `services/agents/model.ts` uses pinned `@anthropic-ai/sdk@0.32.1`, its explicit Node shim and `node-fetch@2.7.0`. It does not rely on global fetch or inherit cloud credentials. Keep exact-target enforcement, redirect/retry rejection, total deadlines, response byte caps and the SDK DEBUG guard.
+- **Compatibility acceptance:** the SDK 0.32.1 upstream README officially lists Node18+. The pinned version has passed `test:agents` on macOS arm64 with Electron22.3.27 / Node16.17.1, including real SQLite, local HTTP model requests, private TCP messages, group mentions and exit. This verifies the tested paths, not upstream support, and does not replace Windows/Linux or real multi-client desktop acceptance. Rerun native tests after any SDK upgrade.
+- `services/agents/runtime.ts` gives each Agent its own dynamic UDP port and real TCP control endpoint, reusing Discovery, Messenger, ChatService, GroupsService and a new independent database. Dynamic ports use directed probes to the host and known peers plus gossip, not same-port broadcasts. Contacts are not fabricated in the UI. Personas/keys stay out of profiles; the `agent1` capability prevents reply loops.
+- `shared/board-games/` contains pure rules and bounded packet validation. `services/board-games.ts` provides host arbitration, dynamic group authorization, revision conflict recovery and threefold repetition counting. The wire type is `board`, capability `board1`. Reliable snapshots exceeding UDP limits use existing TCP frames. Sources bind to known peer IPs; a room ID alone is not authority.
+- Invitations store `BoardInvite` in an existing text message's `file_ref`, with ID `board:<roomId>`. No new message kind or existing-database migration is needed. Old clients ignore unknown control packets and cannot move.
+- Agent manager and board are separate renderer roots. `windows/extension-windows.ts` shares sandbox/navigation protection, appearance-ready gating and zoom synchronization. Management/move IPC binds to the owning webContents; state is pushed only to its window. The bundle checker now covers seven roots without raising the main-window budget.
+- Run `npm test`, `npm run typecheck` and `npm run build`. Model tests use loopback HTTP mocks, never real model calls or billed keys. Actual Agent native-database behavior, cross-client discovery and desktop interactions need separate Electron acceptance. Development-host tests are not Node16 runtime proof.
+
+
+Run `npm run test:agents` for native acceptance inside Electron’s Node16: SDK and local model mock, real SQLite, discovery between two users and an Agent, long TCP messages, explicit group mentions and exit/offline behavior. It uses only temporary directories and loopback ports. If the Electron binary is unavailable, this check remains unverified.

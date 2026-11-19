@@ -58,11 +58,12 @@ describe('@ 成员面板键盘导航与实时过滤（决议 #318）', () => {
 })
 
 describe('@所有人（决议 #318）', () => {
-  it('保留值来自协议常量，候选仅查询命中时出现', () => {
+  it('保留值来自协议常量，空查询放末尾且明确搜索时置顶', () => {
     expect(source).toContain('MENTION_ALL')
     expect(source).toMatch(/from '\.\.\/\.\.\/\.\.\/shared\/protocol'/)
     expect(source).toContain('matchesMentionAll(mentionQuery.value)')
     expect(source).toMatch(/\[MENTION_ALL, \.\.\.members\]/)
+    expect(source).toContain('mentionQuery.value.trim() ? members : [...members, MENTION_ALL]')
   })
 
   it('展示名、插入文本与发送识别共用一套标签逻辑', () => {
@@ -71,6 +72,7 @@ describe('@所有人（决议 #318）', () => {
     expect(body).toContain("tr('所有人')")
     expect(source).toContain('mentionLabel(id)')
     expect(source).toMatch(/id === MENTION_ALL\s*\n\s*\? hasMentionAllToken\(text\)/)
-    expect(functionBody('insertMention')).toContain('mentionLabel(nodeId)')
+    expect(functionBody('insertMention')).toContain('applyMention(nodeId, at, end)')
+    expect(functionBody('applyMention')).toContain('mentionLabel(nodeId)')
   })
 })

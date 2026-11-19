@@ -28,3 +28,12 @@ The left navigation uses `message-circle`, `users`, `package-2`, `refresh-cw` an
 
 - Lucide: <https://github.com/lucide-icons/lucide/tree/0.468.0>, ISC License (some artwork originates from Feather / MIT)
 - Full copyright and license notices: [navigation-icons.txt](build/licenses/navigation-icons.txt), bundled as `licenses/navigation-icons.txt`.
+
+
+## LAN model client
+
+Hosted Agents use the official Anthropic TypeScript SDK and Node HTTP fetch implementation, bundled locally with the app. There is no default cloud connection; only the user's validated LAN model endpoint is contacted.
+
+- Anthropic SDK: <https://github.com/anthropics/anthropic-sdk-typescript>, version 0.32.1, MIT License, Copyright 2023 Anthropic, PBC.
+- node-fetch: <https://github.com/node-fetch/node-fetch>, version 2.7.0, MIT License, Copyright (c) 2016 David Frank.
+- Upstream license files remain in dependency packages. No runtime CDN loading is used.
