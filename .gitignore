@@ -22,6 +22,7 @@ Thumbs.db
 # Claude Code 本地痕迹（会话记忆、本地配置，不公开）
 .remember/
 .claude/
+.agent/
 
 # 参考源码（克隆的外部仓库，不入库；获取方式见 references/readme.md）
 references/ipmsg/

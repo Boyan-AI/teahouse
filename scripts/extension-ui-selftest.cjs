@@ -91,9 +91,17 @@ async function client() {
       }
       else if (r.op === 'close') { win.close(); value = true }
       else if (r.op === 'size') { win.setSize(...r.size); win.show(); value = true }
+      else if (r.op === 'zoom') { win.webContents.setZoomFactor(r.factor); value = true }
+      else if (r.op === 'mouse') {
+        // 真实输入命中缩放后的坐标，不能用 DOM.click 冒充变换后的鼠标可用性。
+        win.show(); win.focus()
+        win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:1,x:r.x,y:r.y})
+        win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,x:r.x,y:r.y})
+        value = true
+      }
       else value = await win.webContents.executeJavaScript(r.code, true)
       process.send({ id: r.id, value })
-    } catch (error) { process.send({ id: r.id, error: String(error.stack || error) }) }
+    } catch (error) { process.send({ id: r.id, error: String(error.stack || error) + '\nRPC: ' + JSON.stringify(r) }) }
   })
   process.send({ ready: true, nodeId: state.nodeId })
 }
@@ -142,6 +150,7 @@ async function run() {
     }
     console.log('CLIENTS_READY', output)
     for (const [self, name] of [[a, '联机测试·乙'], [b, '联机测试·甲']]) {
+      await until(()=>self.js(`Array.from(document.querySelectorAll('.conv')).some(el=>el.textContent.includes(${JSON.stringify(name)}))`),'会话列表渲染')
       await self.js(`Array.from(document.querySelectorAll('.conv')).find(el => el.textContent.includes(${JSON.stringify(name)})).click()`)
       await until(() => self.js('!!document.querySelector("textarea.input")'), '聊天界面')
       await self.js(`(() => { const el=document.querySelector('textarea.input'); el.value='本机头像验证'; el.dispatchEvent(new Event('input',{bubbles:true})); })()`)
@@ -195,6 +204,21 @@ async function run() {
       for (const c of clients) { c.child.disconnect(); c.child.unref() }
       return
     }
+    /** 检查完整画布及文档无滚动，窗口变形和125%字号均需通过。 */
+    const fitBoard = async (self, route, game) => {
+      for (const [label, size, factor] of [['default',[780,820],1],['wide',[1000,500],1],['tall',[320,760],1],['small-zoom',[460,480],1.25],['small',[320,320],1]]) {
+        await self.rpc({op:'zoom',route,factor})
+        await self.rpc({op:'size',route,size})
+        await until(()=>self.js(`(()=>{const r=document.querySelector('.game').getBoundingClientRect();return r.left>=-1 && r.top>=-1 && r.right<=innerWidth+1 && r.bottom<=innerHeight+1 && document.documentElement.scrollHeight<=innerHeight+1 && document.documentElement.scrollWidth<=innerWidth+1})()`,route),game+' '+label+'完整可见')
+        if (label==='small') assert.equal(await self.js('innerWidth<=320 && innerHeight<=320',route),true,'原生最小窗口确实放宽')
+        await self.rpc({op:'capture',route,file:path.join(output,game+'-'+label+'.png')})
+      }
+    }
+    /** 从可见棋格中心发真实鼠标事件，验证CSS变换后的点击坐标。 */
+    const mouseClick = async (self, selector, route) => {
+      const point = await self.js(`(()=>{const el=document.querySelector(${JSON.stringify(selector)});const r=el.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`,route)
+      await self.rpc({op:'mouse',route,...point})
+    }
     const games = []
     for (const [index, game] of ['gomoku', 'xiangqi'].entries()) {
       await create(a, index)
@@ -213,20 +237,22 @@ async function run() {
       catch (e) { console.log('JOIN_FAILURE', await b.rpc({op:'windows'}), await b.rpc({op:'errors'})); throw e }
       await until(async () => (await snapshot(b, route))?.room.viewers.length === 2, '双方加入同步')
       await until(() => a.js('!!document.querySelector(".seats button")', route), '棋盘渲染')
+      await fitBoard(a, route, game)
+      await b.rpc({op:'size',route,size:[320,320]})
       assert.equal(await a.js('document.querySelector(".start").disabled', route), true)
-      await click(a, '.seats button:nth-child(1)', route)
+      await mouseClick(a, '.seats button:nth-child(1)', route)
       await until(async () => (await snapshot(b, route)).room.seats[0] === a.nodeId, '黑/红方座位同步')
-      await click(b, '.seats button:nth-child(2)', route)
+      await mouseClick(b, '.seats button:nth-child(2)', route)
       await until(async () => (await snapshot(a, route)).room.seats[1] === b.nodeId, '白/黑方座位同步')
       assert.equal((await snapshot(a, route)).room.phase, 'waiting', '入座不能悄悄自动开始')
       await until(() => b.js('!document.querySelector(".start").disabled', route), '开始按钮可用')
-      await click(b, '.start', route)
+      await mouseClick(b, '.start', route)
       await until(async () => (await snapshot(a, route)).room.phase === 'playing' && (await snapshot(b, route)).room.phase === 'playing', '双方开始')
       const moves = game === 'gomoku' ? [[a, -1, 112], [b, -1, 113]] : [[a, 54, 45], [b, 27, 36]]
       for (const [ply, [self, from, to]] of moves.entries()) {
         await until(() => self.js('!document.querySelectorAll(".board button")[' + (from < 0 ? to : from) + '].disabled', route), '轮到玩家走子')
-        if (from >= 0) await click(self, '.board button:nth-child(' + (from + 1) + ')', route)
-        await click(self, '.board button:nth-child(' + (to + 1) + ')', route)
+        if (from >= 0) await mouseClick(self, '.board button:nth-child(' + (from + 1) + ')', route)
+        await mouseClick(self, '.board button:nth-child(' + (to + 1) + ')', route)
         await until(async () => (await snapshot(a, route)).room.state.plies === ply + 1 && (await snapshot(b, route)).room.state.plies === ply + 1, '双方走子同步')
       }
       const av = await snapshot(a, route), bv = await snapshot(b, route)
@@ -245,12 +271,14 @@ async function run() {
         assert.equal((await snapshot(b,route)).room.state.winner,0)
         for (const self of [a,b]) await until(()=>self.js('!!document.querySelector("dialog.result")?.open',route),'获胜弹窗')
         // 通配样式不可破坏原生 dialog 的居中定位；同时验证可见边界。
-        for (const self of [a,b]) assert.equal(await self.js('(()=>{const r=document.querySelector("dialog.result").getBoundingClientRect();return Math.abs(r.x+r.width/2-innerWidth/2)<2 && Math.abs(r.y+r.height/2-innerHeight/2)<2 && r.top>=0 && r.bottom<=innerHeight})()',route),true,'结果弹窗必须居中且完整可见')
+        console.log('RESULT_BOUNDS',await a.js(`(()=>{const d=document.querySelector('dialog.result');return {rect:d.getBoundingClientRect().toJSON(),client:d.clientHeight,scroll:d.scrollHeight,return:d.querySelector('.return-board').getBoundingClientRect().toJSON(),viewport:[innerWidth,innerHeight],style:{height:getComputedStyle(d).height,maxHeight:getComputedStyle(d).maxHeight,overflow:getComputedStyle(d).overflow,transform:getComputedStyle(d).transform}}})()`,route))
         await a.rpc({op:'capture',route,file:path.join(output,'game-winner-dialog.png')})
-        await click(a,'.result .again',route)
+        for (const self of [a,b]) assert.equal(await self.js('(()=>{const d=document.querySelector("dialog.result"),r=d.getBoundingClientRect(),b=d.querySelector(".return-board").getBoundingClientRect();return Math.abs(r.x+r.width/2-innerWidth/2)<2 && Math.abs(r.y+r.height/2-innerHeight/2)<2 && r.top>=0 && r.bottom<=innerHeight && d.scrollHeight<=d.clientHeight+1 && b.bottom<=r.bottom})()',route),true,'结果弹窗及返回按钮必须居中且完整可见，无内部滚动')
+        await a.rpc({op:'capture',route,file:path.join(output,'game-winner-dialog.png')})
+        await mouseClick(a,'.result .again',route)
         await until(async ()=>(await snapshot(b,route)).room.ready.includes(a.nodeId),'重开等待同步')
         assert.equal((await snapshot(b,route)).room.phase,'finished','一人准备不能重开')
-        await click(b,'.result .again',route)
+        await mouseClick(b,'.result .again',route)
         await until(async ()=>(await snapshot(a,route)).room.phase==='playing' && (await snapshot(b,route)).room.state.plies===0,'双方确认重开')
         await until(()=>a.js('!document.querySelector("dialog.result")',route),'新局关闭结果窗')
         games[games.length-1].winnerDialog=true; games[games.length-1].rematch=true

@@ -10,6 +10,15 @@ const selected = ref(-1)
 const error = ref('')
 const pending = ref(false)
 const resultDialog = ref<HTMLDialogElement | null>(null)
+const viewport = ref<HTMLElement | null>(null)
+const canvas = ref<HTMLElement | null>(null)
+const scale = ref(1)
+let fitObserver: ResizeObserver | undefined
+/** 同时适配宽高；读取未变换的逻辑尺寸，名单、状态和字体变化时也重新适配。 */
+function fitViewport(): void {
+  if (!viewport.value || !canvas.value) return
+  scale.value = Math.min(1, viewport.value.clientWidth / 660, viewport.value.clientHeight / canvas.value.offsetHeight)
+}
 const subscriptions: Array<() => void> = []
 const room = computed(() => view.value?.room)
 const mySide = computed(() => room.value?.seats.indexOf(view.value?.selfId ?? '') ?? -1)
@@ -72,16 +81,21 @@ async function endGame(): Promise<void> {
 }
 /** 初始化先订阅再取快照，避免独立入口懒加载期间丢失同步事件。 */
 onMounted(async () => {
+  fitObserver = new ResizeObserver(fitViewport)
+  if (viewport.value) fitObserver.observe(viewport.value)
+  if (canvas.value) fitObserver.observe(canvas.value)
+  fitViewport()
   subscriptions.push(window.pantry.onBoardGame(accept), window.pantry.onSettingsUpdated(applyAppearance))
   try { applyAppearance(await window.pantry.getSettings()); accept(await window.pantry.getBoardGame(roomId)) }
   catch { error.value = tr('初始化失败') }
   requestAnimationFrame(() => requestAnimationFrame(() => window.pantry.settingsReady()))
 })
-onUnmounted(() => { for (const stop of subscriptions) stop() })
+onUnmounted(() => { fitObserver?.disconnect(); for (const stop of subscriptions) stop() })
 </script>
 
 <template>
-  <main class="game">
+  <div ref="viewport" class="game-viewport">
+  <main ref="canvas" class="game" :style="{ transform: `translate(-50%, -50%) scale(${scale})` }">
     <header><h1>{{ title }}</h1><span>{{ tr('双人对弈 · 自由旁观') }}</span></header>
     <p role="status" class="status">{{ status }}</p>
     <template v-if="room && view">
@@ -107,7 +121,7 @@ onUnmounted(() => { for (const stop of subscriptions) stop() })
       <p class="hint">{{ tr('房主退出应用或断线后房间结束；房间最长保留两小时。') }}</p>
       <p v-if="view.error" role="alert">{{ tr('房间操作被拒绝：{0}', { 0: tr(({ stale: '状态已更新，请重试', forbidden: '无权执行此操作', full: '座位已满', illegal: '非法走子', unavailable: '房主暂不可达' } as Record<string, string>)[view.error] || '操作失败') }) }}</p>
     </template>
-    <dialog v-if="room?.phase === 'finished' && view" ref="resultDialog" class="result" aria-labelledby="game-result-title" aria-describedby="game-result-help" @cancel.prevent>
+    <dialog v-if="room?.phase === 'finished' && view" ref="resultDialog" class="result" :style="{ transform: `translate(-50%, -50%) scale(${scale})` }" aria-labelledby="game-result-title" aria-describedby="game-result-help" @cancel.prevent>
       <span class="result-mark" aria-hidden="true">{{ room.state.winner === 'draw' ? '＝' : '★' }}</span>
       <p class="result-caption">{{ tr('本局已结束') }}</p>
       <h2 id="game-result-title">{{ status }}</h2>
@@ -123,10 +137,15 @@ onUnmounted(() => { for (const stop of subscriptions) stop() })
     </dialog>
     <p v-if="error" role="alert">{{ error }}</p>
   </main>
+  </div>
 </template>
 
 <style scoped>
-.game { height:100%; overflow-y:auto; box-sizing:border-box; padding:20px; max-width:700px; margin:auto; color:var(--text-1); }
+/* 固定逻辑画布整体缩放，避免只缩棋盘导致底部操作被裁掉。 */
+.game-viewport { position:fixed; inset:0; overflow:hidden; }
+.game { position:absolute; left:50%; top:50%; width:660px; box-sizing:border-box; padding:16px; color:var(--text-1); transform-origin:center; }
+.hint { overflow-wrap:anywhere; }
+.seats button { min-width:0; overflow-wrap:anywhere; }
 header, .seats, footer { display:flex; align-items:center; gap:12px; justify-content:space-between; flex-wrap:wrap; }
 h1 { font-size:22px; margin:0; } header span, .hint { color:var(--text-2); font-size:13px; line-height:1.6; }
 .status { font-weight:600; margin:16px 0; } .seats { margin-bottom:16px; } .seats button { flex:1; }
@@ -137,10 +156,10 @@ button { padding:8px 12px; border:1px solid var(--line); border-radius:6px; font
 .xiangqi { grid-template-columns:repeat(9,minmax(0,1fr)); aspect-ratio:9/10; max-width:504px; }
 .board button { aspect-ratio:1; padding:0; min-width:0; border:none; border-radius:0; display:grid; place-items:center; position:relative; background:linear-gradient(var(--text-3),var(--text-3)) center/1px 100% no-repeat,linear-gradient(var(--text-3),var(--text-3)) center/100% 1px no-repeat; }
 .board .selected { outline:3px solid var(--primary); outline-offset:-3px; z-index:1; }
-.piece { width:80%; height:80%; border-radius:50%; display:grid; place-items:center; box-sizing:border-box; border:2px solid var(--text-1); background:var(--bg-window); font-size:clamp(16px,4vw,30px); font-weight:700; user-select:none; }
+.piece { width:80%; height:80%; border-radius:50%; display:grid; place-items:center; box-sizing:border-box; border:2px solid var(--text-1); background:var(--bg-window); font-size:30px; font-weight:700; user-select:none; }
 .gomoku .dark { background:#20242c; border-color:#050505; } .gomoku .light { background:#fafafa; border-color:#555; }
 .xiangqi .dark { color:var(--text-1); } .red { color:var(--danger); border-color:var(--danger); }
-.result { position:fixed; inset:0; margin:auto; max-height:calc(100vh - 48px); overflow:auto; width:min(360px,calc(100vw - 64px)); box-sizing:border-box; padding:28px; border:1px solid var(--line); border-radius:16px; background:var(--bg-window); color:var(--text-1); text-align:center; box-shadow:var(--shadow-float); }
+.result { position:fixed; inset:50% auto auto 50%; margin:0; width:360px; max-width:none; max-height:none; overflow:visible; box-sizing:border-box; padding:28px; border:1px solid var(--line); border-radius:16px; background:var(--bg-window); color:var(--text-1); text-align:center; box-shadow:var(--shadow-float); }
 .result::backdrop { background:rgb(0 0 0 / 38%); } .result-mark { display:grid; place-items:center; margin:0 auto 16px; width:56px; height:56px; border-radius:50%; background:var(--primary-weak); color:var(--primary); font-size:30px; }
 .result h2 { margin:8px 0 16px; font-size:24px; } .result p { font-size:13px; line-height:1.7; color:var(--text-2); } .result-caption { margin:0; }
 .result-actions { display:flex; gap:12px; margin-top:24px; } .result-actions button { flex:1; } .again { background:var(--primary); color:var(--on-primary); border-color:var(--primary); }

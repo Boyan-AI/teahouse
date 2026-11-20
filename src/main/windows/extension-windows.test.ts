@@ -22,6 +22,14 @@ function harness() {
   return { windows, closed, mayClose }
 }
 describe('扩展独立窗口安全', () => {
+  it('仅棋盘允许缩到320像素，管理窗口保留原最小尺寸', () => {
+    const h = harness()
+    h.windows.open('r1', 'board', '棋盘')
+    h.windows.open('agents', 'agents', 'Agent')
+    h.windows.open('stickers', 'stickers', '表情管理')
+    expect(mocks.instances[0].options).toMatchObject({ minWidth: 320, minHeight: 320 })
+    for (const win of mocks.instances.slice(1)) expect(win.options).toMatchObject({ minWidth: 580, minHeight: 620 })
+  })
   it('只加载本地入口、保持沙箱隔离并等待主题与绘制信号', () => {
     const h = harness(); h.windows.open('r1', 'board', '棋盘')
     const win = mocks.instances[0]

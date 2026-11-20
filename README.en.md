@@ -211,6 +211,8 @@ Deletion requires confirmation and **removes only the favorite index—not chat 
 
 ### Gomoku and Chinese chess
 
+The board, text and controls scale together to fit both window dimensions without page scrolling. Windows can shrink to 320×320 (including the native title bar); enlarge them for comfortable reading and clicking.
+
 In a direct or group conversation, choose **Gomoku** or **Chinese chess** from **PK**. The creator opens an independent board; recipients click an invitation card to join. Opening the same game from PK in the same conversation reuses an existing active room. At least one online peer with board-game support is required. Older clients are never forced to open a window.
 
 - Join as a spectator, then choose a black/white or red/black seat. Once both seats are occupied, either seated player clicks **Start game**. Spectators cannot start it. Full rooms accept spectators only, who cannot move. Access is limited to the original direct-message peers or current group members.

@@ -13,12 +13,12 @@ export class ExtensionWindows {
     closed(key: string): void
   }) {}
 
-  /** 独立 renderer 根避免把棋盘和表单资源并入主窗口静态闭包。 */
+  /** 独立 renderer 根避免静态闭包膨胀；棋盘允许小窗，由渲染层整体等比适配。 */
   open(key: string, route: 'agents' | 'board' | 'stickers', title: string): void {
     const previous = this.windows.get(key)
     if (previous && !previous.isDestroyed()) { previous.show(); previous.focus(); return }
     const settings = this.deps.settings()
-    const win = new BrowserWindow({ width: route === 'board' ? 780 : 850, height: 820, minWidth: 580, minHeight: 620,
+    const win = new BrowserWindow({ width: route === 'board' ? 780 : 850, height: 820, minWidth: route === 'board' ? 320 : 580, minHeight: route === 'board' ? 320 : 620,
       show: false, title, backgroundColor: settings.theme === 'dark' ? '#171e29' : '#ffffff',
       webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true, sandbox: true, nodeIntegration: false } })
     this.windows.set(key, win); win.setMenuBarVisibility(false)
