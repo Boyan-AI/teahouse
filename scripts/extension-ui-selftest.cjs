@@ -83,6 +83,8 @@ async function client() {
       else if (r.op === 'windows') value = windows.map(w => w.webContents.getURL())
       else if (!win) throw new Error('窗口不存在：' + r.route)
       else if (r.op === 'capture') {
+        // 截图前显式展示测试窗口，避免 macOS 遮挡节流挂起 requestAnimationFrame。
+        win.show(); win.focus()
         // 等待布局与合成帧，避免 DOM 已更新而截图仍是上一帧。
         await win.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
         fs.writeFileSync(r.file, (await win.webContents.capturePage()).toPNG()); value = true
@@ -170,7 +172,7 @@ async function run() {
     const addLocalStickers = self => self.js(`(async()=>{const items=[];for(const color of ['#cb8264','#4f938c','#6c75aa']){const canvas=document.createElement('canvas');canvas.width=96;canvas.height=96;const ctx=canvas.getContext('2d');ctx.fillStyle=color;ctx.fillRect(0,0,96,96);ctx.fillStyle='white';ctx.font='44px sans-serif';ctx.fillText('☺',26,60);const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/webp'));items.push(await window.pantry.addSticker(await blob.arrayBuffer(),'.webp',96,96));}return items})()`)
     // 试用保留两个独立客户端与管理入口，不启用模型，不接触用户已有数据。
     if (process.env.PANTRY_UI_KEEP) {
-      const sample='**图文与引用试用**\n- 选择或粘贴图片后输入说明，一起发送\n- 文字和图片均可右键引用\n- 表情面板点“管理”，拖动排序或选择删除'
+      const sample='**图文与引用试用**\n- 选择或粘贴图片后输入说明，一起发送\n- 文字和图片均可右键引用\n- 表情包第一格点齿轮，拖动排序或选择删除'
       await a.js('(()=>{const el=document.querySelector("textarea.input");el.value='+JSON.stringify(sample)+';el.dispatchEvent(new Event("input",{bubbles:true}));})()')
       await click(a,'.send')
       await composeImage(a,'**图文试用**：图片和说明是同一条消息，可右键引用。')
@@ -180,10 +182,14 @@ async function run() {
       await b.js('window.pantry.openStickerManager()')
       await until(async()=>(await b.rpc({op:'windows'})).some(url=>url.includes('#/stickers')),'试用管理窗口')
       await until(()=>b.js('document.querySelectorAll(".sticker-tile").length===3','stickers'),'试用收藏列表')
-      await click(a,'button[aria-label="Agent 管理"]')
-      await until(async()=>(await a.rpc({op:'windows'})).some(url=>url.includes('#/agents')),'试用 AI 窗口')
-      await until(()=>a.js('!!document.querySelector("#agent-name")','agents'),'试用 AI 表单')
       await b.rpc({op:'capture',route:'stickers',file:path.join(output,'preview-stickers.png')})
+      await b.rpc({op:'close',route:'stickers'})
+      await until(async()=>!(await b.rpc({op:'windows'})).some(url=>url.includes('#/stickers')),'试用管理窗关闭')
+      // 展示新的首格入口，由用户自己点击跳转，不让管理窗口遮住发送面板。
+      await click(b,'button[aria-label="表情"]')
+      await until(()=>b.js('!!document.querySelector(".emoji-scope .tabs")'),'试用表情面板')
+      await b.js('Array.from(document.querySelectorAll(".emoji-scope .tabs button")).find(el=>el.textContent.includes("表情包")).click()')
+      await until(()=>b.js('document.querySelectorAll(".sticker-grid .stk").length===3'),'试用收藏同步')
       await b.rpc({op:'capture',file:path.join(output,'preview-caption.png')})
       console.log('PREVIEW_READY',JSON.stringify({output,clients:clients.map(c=>({pid:c.child.pid,nodeId:c.nodeId}))}))
       for (const c of clients) { c.child.disconnect(); c.child.unref() }
@@ -405,7 +411,11 @@ async function run() {
     // 从生产发送面板进入管理窗，先验证空态，再创建本地测试素材。
     await click(b,'button[aria-label="表情"]')
     await until(()=>b.js('!!document.querySelector(".emoji-scope .tabs")'),'表情面板')
-    await b.js('Array.from(document.querySelectorAll(".emoji-scope .tabs button")).find(el=>el.textContent==="管理").click()')
+    await b.js('Array.from(document.querySelectorAll(".emoji-scope .tabs button")).find(el=>el.textContent.includes("表情包")).click()')
+    assert.equal(await b.js('document.querySelector(".sticker-grid").firstElementChild.matches("button.sticker-settings")'),true,'空收藏首格始终提供设置入口')
+    assert.equal(await b.js('Array.from(document.querySelectorAll(".emoji-scope .tabs button")).some(el=>el.textContent==="管理")'),false,'顶部不再显示管理页签')
+    await b.rpc({op:'capture',file:path.join(output,'sticker-settings-empty.png')})
+    await click(b,'.sticker-settings')
     await until(async()=>(await b.rpc({op:'windows'})).some(url=>url.includes('#/stickers')),'表情管理窗口')
     await until(()=>b.js('!!document.querySelector(".empty")','stickers'),'收藏空态')
     await b.rpc({op:'capture',route:'stickers',file:path.join(output,'stickers-empty-light.png')})
@@ -416,6 +426,8 @@ async function run() {
     await b.js('Array.from(document.querySelectorAll(".emoji-scope .tabs button")).find(el=>el.textContent.includes("表情包")).click()')
     const panelIds=()=>b.js('Array.from(document.querySelectorAll(".emoji-scope .stk img")).map(el=>el.src.replace("pantry-sticker://",""))')
     await until(async()=>(await panelIds()).length===3,'发送面板同步新增')
+    assert.equal(await b.js('document.querySelector(".sticker-grid").firstElementChild.matches("button.sticker-settings")'),true,'新增收藏不改变设置入口首位')
+    await b.rpc({op:'capture',file:path.join(output,'sticker-settings-filled.png')})
     // 主窗不能绕过管理页删除或排序；外部拖放也没有内部 dragged ID。
     await b.js('window.pantry.removeSticker('+JSON.stringify(original[0])+')')
     assert.equal((await b.js('window.pantry.listStickers()')).length,3)

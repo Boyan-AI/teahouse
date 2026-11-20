@@ -205,7 +205,7 @@ Picking, dropping or pasting an image adds a pending attachment. Type a caption 
 
 ### Manage sticker favorites
 
-Click **Manage** in the chat emoji/sticker panel to open a separate window. Import local images, drag to reorder, use move buttons or Alt + Left/Right, select all and batch-delete. Order is saved automatically, synchronized to the sending panel and retained when reopened. Right-clicking a favorite no longer deletes it.
+Click the **settings gear in the first cell of the sticker grid** to open the separate manager. The entry remains available when there are no favorites. Import local images, drag to reorder, use move buttons or Alt + Left/Right, select all and batch-delete. Order is saved automatically, synchronized to the sending panel and retained when reopened. Right-clicking a favorite no longer deletes it.
 
 Deletion requires confirmation and **removes only the favorite index—not chat history or local assets that historical/in-flight messages may still reference**. This is not disk cleanup or secure erasure. There is no store, cloud synchronization or external download.
 

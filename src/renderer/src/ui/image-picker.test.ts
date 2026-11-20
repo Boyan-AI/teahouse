@@ -61,4 +61,15 @@ describe('发送图片按钮选择范围', () => {
     expect(source).toContain('stickerImportPathGrants.consume(event.sender.id, [path])')
     expect(source).toContain('return readStickerSource(path)')
   })
+  it('表情管理只放在收藏网格首位，空收藏时也可点击', () => {
+    const tabs=sourceBetween(emojiPanelSource,'<div class="tabs">','<div v-if="tab')
+    expect(tabs).not.toContain('openManager')
+    const grid=sourceBetween(emojiPanelSource,'<div v-else class="grid sticker-grid">','<p v-if="stickers.list.length === 0"')
+    expect(grid.indexOf('class="sticker-settings"')).toBeLessThan(grid.indexOf('v-for="s in stickers.list"'))
+    expect(grid).toContain('name="settings"')
+    expect(grid).toContain(':aria-label="tr(\'表情管理\')"')
+    expect(grid).toContain('@click="openManager()"')
+    expect(grid.slice(0,grid.indexOf('v-for="s in stickers.list"'))).not.toContain(':disabled')
+  })
+
 })

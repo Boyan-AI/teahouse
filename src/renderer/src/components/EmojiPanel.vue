@@ -33,7 +33,7 @@ async function importStickers(): Promise<void> {
     importLabelTimer = null
   }, 2000)
 }
-/** 管理与发送分离，右键不再有破坏性动作。 */
+/** 网格首位设置入口只打开管理窗，不参与收藏排序或消息发送。 */
 function openManager(): void { void window.pantry.openStickerManager() }
 </script>
 
@@ -44,7 +44,6 @@ function openManager(): void { void window.pantry.openStickerManager() }
         <PantryIcon name="smile" :size="15" />{{ tr('表情') }}</button>
       <button :class="{ on: tab === 'sticker' }" @click="tab = 'sticker'">
         <PantryIcon name="sticker" :size="15" />{{ tr('表情包') }}</button>
-      <button type="button" @click="openManager()">{{ tr('管理') }}</button>
       <button
         class="import-button"
         type="button"
@@ -68,7 +67,16 @@ function openManager(): void { void window.pantry.openStickerManager() }
       </button>
     </div>
 
-    <div v-else class="grid sticker-grid" :class="{ 'is-empty': stickers.list.length === 0 }">
+    <div v-else class="grid sticker-grid">
+      <button
+        class="sticker-settings"
+        type="button"
+        :aria-label="tr('表情管理')"
+        :title="tr('表情管理')"
+        @click="openManager()"
+      >
+        <PantryIcon name="settings" :size="26" />
+      </button>
       <div
         v-for="s in stickers.list"
         :key="s.id"
@@ -154,11 +162,6 @@ function openManager(): void { void window.pantry.openStickerManager() }
   grid-auto-rows: max-content;
   gap: 6px;
 }
-.sticker-grid.is-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
 .emo {
   border: none;
   background: transparent;
@@ -175,7 +178,7 @@ function openManager(): void { void window.pantry.openStickerManager() }
 .emo:hover {
   background: var(--line);
 }
-.stk {
+.stk, .sticker-settings {
   aspect-ratio: 1;
   border-radius: 6px;
   overflow: hidden;
@@ -185,8 +188,13 @@ function openManager(): void { void window.pantry.openStickerManager() }
   background: var(--bg-list);
   position: relative;
 }
-.stk:hover {
+.stk:hover, .sticker-settings:hover, .sticker-settings:focus-visible {
   outline: 2px solid var(--primary);
+}
+/* 设置入口与收藏同尺寸，虚线与齿轮区分管理动作和发送动作。 */
+.sticker-settings {
+  border: 1px dashed var(--line);
+  color: var(--text-2);
 }
 .stk.disabled {
   opacity: 0.45;
