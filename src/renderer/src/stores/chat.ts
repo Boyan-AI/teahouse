@@ -1,3 +1,4 @@
+import type { ImageMessageMeta } from '../../../shared/image-message'
 import { tr } from '../utils/i18n'
 import { defineStore } from 'pinia'
 import { shallowReactive } from 'vue'
@@ -497,7 +498,7 @@ export const useChatStore = defineStore('chat', {
       const view =
         conv.type === 'group'
           ? await window.pantry.sendGroupText(conv.peerId, text, mentions, replyTo)
-          : await window.pantry.sendText(conv.peerId, text)
+          : await window.pantry.sendText(conv.peerId, text, replyTo)
       return this.pushOwn(view)
     },
 
@@ -541,24 +542,24 @@ export const useChatStore = defineStore('chat', {
     },
 
     /** 磁盘图片按图片消息发送（拖拽图片/选择器） */
-    async sendImagePath(path: string): Promise<boolean> {
+    async sendImagePath(path: string, meta?: ImageMessageMeta): Promise<boolean> {
       const conv = this.activeConv
       if (!conv) return false
       const view =
         conv.type === 'group'
-          ? await window.pantry.offerGroupImagePath(conv.peerId, path)
-          : await window.pantry.offerImagePath(conv.peerId, path)
+          ? await window.pantry.offerGroupImagePath(conv.peerId, path, meta)
+          : await window.pantry.offerImagePath(conv.peerId, path, meta)
       return this.pushOwn(view)
     },
 
     /** 粘贴的图片字节（截图 Ctrl+V） */
-    async sendImageBytes(name: string, bytes: ArrayBuffer, tableText?: TableTextMeta): Promise<boolean> {
+    async sendImageBytes(name: string, bytes: ArrayBuffer, tableText?: TableTextMeta, meta?: ImageMessageMeta): Promise<boolean> {
       const conv = this.activeConv
       if (!conv) return false
       const view =
         conv.type === 'group'
-          ? await window.pantry.sendGroupImageBytes(conv.peerId, name, bytes, tableText)
-          : await window.pantry.sendImageBytes(conv.peerId, name, bytes, tableText)
+          ? await window.pantry.sendGroupImageBytes(conv.peerId, name, bytes, tableText, meta)
+          : await window.pantry.sendImageBytes(conv.peerId, name, bytes, tableText, meta)
       return this.pushOwn(view)
     },
 

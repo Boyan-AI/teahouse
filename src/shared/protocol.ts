@@ -268,6 +268,8 @@ export type MsgPayload =
   | {
       kind: 'text'
       text: string
+      /** 同会话源消息 ID，接收端从本地读取引用内容。 */
+      replyTo?: string
       /** 补发标记：消息保持原 id/ts，落在历史正确位置 */
       resend?: boolean
     }
@@ -467,7 +469,7 @@ export const GROUP_IMG_AUTO_ACCEPT = 10 * 1024 * 1024
 /** 表格图片消息原始 TSV 文字视图上限（决议 #190） */
 export const TABLE_TEXT_LIMIT_BYTES = TEXT_TCP_LIMIT
 
-export interface FileCtlOffer {
+export interface FileCtlOffer extends ImageMessageMeta {
   op: 'offer'
   transferId: string
   /** 聊天媒体消息 ID；图片 / 普通文件 / 群文件新端填写，用于跨端撤回锚点。 */
@@ -633,4 +635,5 @@ export const MSG_TYPES = {
 export function isAvatarHash(value: unknown): value is string {
   return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
 }
+import type { ImageMessageMeta } from './image-message'
 import type { PkGame, PkResult } from './pk'

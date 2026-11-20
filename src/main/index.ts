@@ -1,3 +1,5 @@
+import type { StickerView } from '../shared/ipc'
+import { parseImageMessageMeta } from '../shared/image-message'
 import { BoardGamesService } from './services/board-games'
 import { isBoardInvite, isBoardAction, boardId, type BoardView } from '../shared/board-games'
 import { isAgentInput } from '../shared/agents'
@@ -312,7 +314,7 @@ if (!gotLock) {
       return dialog.showMessageBoxSync(win, { type: 'question', message: tr('离开棋盘将视为认输，确定离开？'),
         buttons: [tr('取消'), tr('离开')], defaultId: 0, cancelId: 0 }) === 1
     },
-    closed: key => { if (key !== 'agents') void boards?.action(key, { kind: 'leave' }) }
+    closed: key => { if (key !== 'agents' && key !== 'stickers') void boards?.action(key, { kind: 'leave' }) }
   })
   let groups: GroupsService | null = null
   let groupRepo: GroupRepo | null = null
@@ -592,8 +594,11 @@ if (!gotLock) {
     }
   }
 
+  /** 受授权的草稿/收藏图源先检查体积，避免把明显超限文件整体读入内存。 */
   async function readStickerSource(path: string): Promise<ImageSourceBytes | null> {
     try {
+      const info = await stat(path)
+      if (!info.isFile() || info.size <= 0 || info.size > IMAGE_SOURCE_MAX_BYTES) return null
       const buf = await readFile(path)
       if (buf.length === 0 || buf.length > IMAGE_SOURCE_MAX_BYTES) return null
       const metadata = imagePreview.isInlineNamedBytes(path, buf)
@@ -1738,6 +1743,20 @@ if (!gotLock) {
       database: databaseMode, diagnostics: diagnostics.status() }
   })
 
+  ipcMain.handle(IpcChannels.stickersOpen, event => {
+    if (event.sender !== mainWindow?.webContents) return
+    extensionWindows.open('stickers','stickers',tr('表情管理'))
+  })
+  /** 管理窗与发送面板读取同一持久化顺序，避免跨窗口各自维护副本。 */
+  function stickerViews(): StickerView[] { return (stickerRepo?.list() ?? []).map(r=>({id:r.id,w:r.w,h:r.h,animated:r.animated!==0})) }
+  /** 收藏变化仅推送本机窗口，不参与局域网广播。 */
+  function notifyStickers(): StickerView[] {
+    const list=stickerViews()
+    mainWindow?.webContents.send(IpcEvents.stickersChanged,list)
+    extensionWindows.send('stickers',IpcEvents.stickersChanged,list)
+    return list
+  }
+
   ipcMain.handle(IpcChannels.agentsOpen, event => {
     if (event.sender !== mainWindow?.webContents) return
     extensionWindows.open('agents', 'agents', tr('Agent 管理'))
@@ -1890,10 +1909,11 @@ if (!gotLock) {
     return chat.pageMessages(convId, before, lim)
   })
 
-  ipcMain.handle(IpcChannels.msgSend, (_event, peerId: unknown, text: unknown) => {
+  ipcMain.handle(IpcChannels.msgSend, (_event, peerId: unknown, text: unknown, reply: unknown) => {
+    if (reply !== undefined && (typeof reply !== 'string' || !reply || reply.length > 64)) return null
     if (typeof peerId !== 'string' || peerId.length === 0 || peerId.length > 64) return null
     if (typeof text !== 'string' || text.length === 0 || text.length > 4096) return null
-    return chat?.sendText(peerId, text) ?? null
+    return chat?.sendText(peerId, text, reply as string | undefined) ?? null
   })
 
   ipcMain.handle(IpcChannels.msgResend, (_event, msgId: unknown): boolean => {
@@ -2589,31 +2609,35 @@ if (!gotLock) {
 
   ipcMain.handle(
     IpcChannels.imgSendBytes,
-    async (_event, peerId: unknown, name: unknown, bytes: unknown, tableText: unknown) => {
+    async (_event, peerId: unknown, name: unknown, bytes: unknown, tableText: unknown, input: unknown) => {
+      const meta = parseImageMessageMeta(input); if (!meta) return null
       return handleImageBytes(peerId, name, bytes, tableText, (targetId, paths, want, tableTextMeta) =>
-        files?.offerPaths(targetId, paths, want, tableTextMeta)
+        files?.offerPaths(targetId, paths, want, tableTextMeta, meta)
       )
     }
   )
 
   ipcMain.handle(
     IpcChannels.groupImgSendBytes,
-    async (_event, groupId: unknown, name: unknown, bytes: unknown, tableText: unknown) => {
+    async (_event, groupId: unknown, name: unknown, bytes: unknown, tableText: unknown, input: unknown) => {
+      const meta = parseImageMessageMeta(input); if (!meta) return null
       return handleImageBytes(groupId, name, bytes, tableText, (targetId, paths, want, tableTextMeta) =>
-        files?.offerGroupPaths(targetId, paths, want, tableTextMeta)
+        files?.offerGroupPaths(targetId, paths, want, tableTextMeta, meta)
       )
     }
   )
 
-  ipcMain.handle(IpcChannels.imgOfferPath, async (event, peerId: unknown, path: unknown) => {
+  ipcMain.handle(IpcChannels.imgOfferPath, async (event, peerId: unknown, path: unknown, input: unknown) => {
+    const meta = parseImageMessageMeta(input); if (!meta) return null
     return handleImagePath(event.sender.id, peerId, path, (targetId, paths, want) =>
-      files?.offerPaths(targetId, paths, want)
+      files?.offerPaths(targetId, paths, want, undefined, meta)
     )
   })
 
-  ipcMain.handle(IpcChannels.groupImgOfferPath, async (event, groupId: unknown, path: unknown) => {
+  ipcMain.handle(IpcChannels.groupImgOfferPath, async (event, groupId: unknown, path: unknown, input: unknown) => {
+    const meta = parseImageMessageMeta(input); if (!meta) return null
     return handleImagePath(event.sender.id, groupId, path, (targetId, paths, want) =>
-      files?.offerGroupPaths(targetId, paths, want)
+      files?.offerGroupPaths(targetId, paths, want, undefined, meta)
     )
   })
 
@@ -3016,6 +3040,12 @@ if (!gotLock) {
 
   ipcMain.handle(IpcChannels.clipboardReadImage, () => readClipboardImage())
 
+  // 选择器授予的一次性路径仅用于读取图片草稿，不允许 renderer 任意读盘。
+  ipcMain.handle(IpcChannels.imageDraftSource, async (event, path: unknown) => {
+    if (event.sender !== mainWindow?.webContents || typeof path !== 'string' || !rendererPathGrants.consume(event.sender.id,[path])) return null
+    return readStickerSource(path)
+  })
+
   ipcMain.handle(IpcChannels.stickerFetchSource, async (_event, transferId: unknown) => {
     if (typeof transferId !== 'string' || transferId.length > 64) return null
     const media = await managedInlineImageView(transferId)
@@ -3053,7 +3083,8 @@ if (!gotLock) {
 
   ipcMain.handle(
     IpcChannels.stickerAdd,
-    (_event, bytes: unknown, ext: unknown, w: unknown, h: unknown) => {
+    (event, bytes: unknown, ext: unknown, w: unknown, h: unknown) => {
+      if (event.sender !== mainWindow?.webContents && !extensionWindows.owns(event,'stickers')) return null
       if (!stickerRepo) return null
       if (!(bytes instanceof ArrayBuffer) || bytes.byteLength === 0) return null
       if (bytes.byteLength > 2 * 1024 * 1024) return null // GIF ≤2MB / 静图压缩后远小于此
@@ -3065,6 +3096,7 @@ if (!gotLock) {
       const path = join(stickersDir(), `${id}${ext}`)
       writeFileSync(path, Buffer.from(bytes))
       stickerRepo.insert(id, path, width, height, ext === '.gif')
+      notifyStickers()
       return { id, w: width, h: height, animated: ext === '.gif' }
     }
   )
@@ -3078,22 +3110,21 @@ if (!gotLock) {
     }))
   )
 
-  ipcMain.handle(IpcChannels.stickerRemove, (_event, id: unknown) => {
+  ipcMain.handle(IpcChannels.stickerRemove, (event, id: unknown) => {
+    if (!extensionWindows.owns(event,'stickers')) return
     if (typeof id !== 'string' || id.length > 64 || !stickerRepo) return
-    const path = stickerRepo.remove(id)
-    if (path && isPathInsideAny(path, managedStickerRoots())) rmSync(path, { force: true })
+    // 仅移除收藏索引；历史聊天/在途发送可能仍引用此受管素材，不能直接删原图。
+    stickerRepo.remove(id)
+    notifyStickers()
   })
 
-  ipcMain.handle(IpcChannels.stickerReorder, (_event, ids: unknown) => {
-    if (!stickerRepo || !Array.isArray(ids)) return []
-    const clean = ids.filter((id): id is string => typeof id === 'string' && id.length <= 64)
-    stickerRepo.reorder(clean)
-    return stickerRepo.list().map((r) => ({
-      id: r.id,
-      w: r.w,
-      h: r.h,
-      animated: r.animated !== 0
-    }))
+  ipcMain.handle(IpcChannels.stickerReorder, (event, ids: unknown) => {
+    if (!extensionWindows.owns(event,'stickers') || !stickerRepo || !Array.isArray(ids)) return []
+    const current = stickerRepo.list().map(r=>r.id)
+    // 必须提交完整排列，过期窗口/重复/未知ID不能破坏排序。
+    if (ids.length !== current.length || new Set(ids).size !== ids.length || ids.some(id=>typeof id !== 'string' || !current.includes(id))) return notifyStickers()
+    stickerRepo.reorder(ids)
+    return notifyStickers()
   })
 
   ipcMain.handle(IpcChannels.stickerSend, async (_event, targetId: unknown, id: unknown, isGroup: unknown) => {

@@ -1,6 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ImageSourceBytes } from '../../../shared/ipc'
+import type { ImageSourceBytes, StickerView } from '../../../shared/ipc'
 import { useStickersStore } from './stickers'
 
 function staticSource(): ImageSourceBytes {
@@ -76,4 +76,26 @@ describe('表情包导入', () => {
     expect(addSticker).toHaveBeenCalledWith(bytes, '.gif', 160, 90)
     expect(close).toHaveBeenCalledOnce()
   })
+  it('管理事件只订阅一次并立即同步发送面板，过期排列不能误报成功', async () => {
+    let changed!: (list:StickerView[])=>void
+    const first={id:'a',w:1,h:1,animated:false},second={...first,id:'b'}
+    const onStickersChanged=vi.fn(listener=>{changed=listener;return()=>undefined})
+    const reorderStickers=vi.fn().mockResolvedValue([second,first])
+    vi.stubGlobal('window',{pantry:{onStickersChanged,listStickers:vi.fn().mockResolvedValue([first]),reorderStickers}})
+    const store=useStickersStore();await store.init();await store.init()
+    expect(onStickersChanged).toHaveBeenCalledOnce()
+    changed([first,second]);expect(store.list.map(item=>item.id)).toEqual(['a','b'])
+    await expect(store.reorder(['b','a'])).resolves.toBeUndefined()
+    await expect(store.reorder(['a','b'])).rejects.toThrow('stale sticker order')
+    expect(store.list.map(item=>item.id)).toEqual(['b','a'])
+  })
+  it('收藏事件先于添加 IPC 返回时仍只保留一个素材', async () => {
+    const item={id:'gif',w:1,h:1,animated:true}
+    const store=useStickersStore()
+    vi.stubGlobal('window',{pantry:{addSticker:vi.fn(async()=>{store.list=[item];return item})}})
+    vi.stubGlobal('createImageBitmap',vi.fn().mockResolvedValue({width:1,height:1,close:vi.fn()}))
+    await store.addSource({bytes:new Uint8Array([0x47,0x49,0x46,0x38]).buffer,ext:'.gif',width:1,height:1,animated:true})
+    expect(store.list.map(item=>item.id)).toEqual(['gif'])
+  })
+
 })

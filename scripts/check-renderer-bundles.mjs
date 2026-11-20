@@ -2,10 +2,11 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const REQUIRED_ROOTS = ['App.vue', 'SettingsApp.vue', 'CaptureApp.vue', 'ImageViewerApp.vue', 'RemoteViewApp.vue', 'AgentsApp.vue', 'BoardGameApp.vue']
+const REQUIRED_ROOTS = ['App.vue', 'SettingsApp.vue', 'CaptureApp.vue', 'ImageViewerApp.vue', 'RemoteViewApp.vue', 'AgentsApp.vue', 'BoardGameApp.vue', 'StickersApp.vue']
 const DEFAULT_MAX_BOOTSTRAP_BYTES = 200 * 1024
 const DEFAULT_ROOT_BUDGETS = {
   // 独立扩展窗只依赖 Vue、共享主题与纯规则，不引入主窗完整组件树。
+  'StickersApp.vue': { js: 128 * 1024, css: 16 * 1024 },
   'AgentsApp.vue': { js: 128 * 1024, css: 16 * 1024 },
   'BoardGameApp.vue': { js: 128 * 1024, css: 16 * 1024 },
   'RemoteViewApp.vue': { js: 128 * 1024, css: 16 * 1024 },
@@ -186,7 +187,7 @@ function main() {
     process.exitCode = 1
     return
   }
-  console.log(`[renderer-bundles] 七入口检查通过，公共启动闭包 ${result.bootstrapBytes} 字节`)
+  console.log(`[renderer-bundles] 八入口检查通过，公共启动闭包 ${result.bootstrapBytes} 字节`)
   for (const rootName of REQUIRED_ROOTS) {
     const sizes = result.roots[rootName]
     console.log(`[renderer-bundles] ${rootName} 完整静态闭包 JS ${sizes.js} 字节 / CSS ${sizes.css} 字节`)

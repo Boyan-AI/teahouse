@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { FileRefView, ForwardTarget, MessageView, TableTextMeta } from '../../shared/ipc'
 import type { MsgRepo, MsgRow } from '../store/msg-repo'
 import type { FilesService } from './files'
@@ -126,4 +126,11 @@ describe('ForwardService', () => {
     expect(result.ok).toBe(1)
     expect(calls).toEqual([{ want: 'file', tableText: undefined }])
   })
+  it('转发图文保留说明，但不跨会话传递引用或提及意图', async () => {
+    const offerPaths=vi.fn().mockResolvedValue({id:'forwarded'})
+    const forward=new ForwardService({msgRepo:{get:()=>row({reply_to:'private-source',file_ref:fileRef({caption:'保留说明',mentions:['agent'],replyTo:'private-source'})})} as unknown as MsgRepo,files:{transferView:()=>({savedPath:'/tmp/a.png'}),offerPaths} as unknown as FilesService,chat:{} as ChatService,groups:{} as GroupsService})
+    expect(await forward.forward('msg-1',[{type:'single',id:'new-peer'}])).toMatchObject({ok:1})
+    expect(offerPaths).toHaveBeenCalledWith('new-peer',['/tmp/a.png'],'image',undefined,{caption:'保留说明'})
+  })
+
 })

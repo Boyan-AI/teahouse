@@ -1,3 +1,4 @@
+import type { ImageMessageMeta } from './image-message'
 import type { AgentInput, AgentView } from './agents'
 import type { BoardAction, BoardGame, BoardInvite, BoardView } from './board-games'
 import type { Language, SystemMessage } from './i18n'
@@ -11,6 +12,8 @@ import type { ScreenAvailability, ScreenState, ScreenSource, ScreenMode, ScreenI
 
 export const IpcChannels = {
   agentsOpen: 'agents:open', agentsList: 'agents:list', agentsSave: 'agents:save', agentsRemove: 'agents:remove',
+  stickersOpen: 'stickers:open',
+  imageDraftSource: 'image:draft-source',
   boardCreate: 'board:create', boardOpen: 'board:open', boardView: 'board:view', boardAction: 'board:action',
 
   diagnosticsExport: 'diagnostics:export',
@@ -144,6 +147,7 @@ export const IpcChannels = {
 
 /** main → renderer 的事件推送 */
 export const IpcEvents = {
+  stickersChanged: 'stickers:changed',
   agentsChanged: 'agents:changed', boardChanged: 'board:changed',
 
   screenState: 'screen:state',
@@ -285,7 +289,7 @@ export interface TableTextMeta {
 }
 
 /** 文件消息引用（messages.file_ref 的 JSON 结构） */
-export interface FileRefView {
+export interface FileRefView extends ImageMessageMeta {
   transferId: string
   /** 群聊发送侧：同一条群消息对应的多个点对点 transfer */
   transferIds?: string[]
@@ -791,6 +795,10 @@ export interface CaptureFailureNotice {
 
 /** preload 经 contextBridge 暴露到 window.pantry 的 API 形状 */
 export interface PantryApi {
+  /** 仅消费图片选择器授权，返回受限图片字节供草稿预览。 */
+  readImageDraft(path: string): Promise<ImageSourceBytes | null>
+  openStickerManager(): Promise<void>
+  onStickersChanged(listener: (stickers: StickerView[]) => void): () => void
   openAgents(): Promise<void>
   listAgents(): Promise<AgentView[]>
   saveAgent(input: AgentInput): Promise<{ ok: boolean; error?: string }>
@@ -844,7 +852,7 @@ export interface PantryApi {
   /** 倒序游标分页；beforeSeq 传 null 取最新一页，返回按时间升序 */
   pageMessages(convId: string, beforeSeq: number | null, limit?: number): Promise<MessageView[]>
   /** 发文本；超长（>800 字节）或空白返回 null */
-  sendText(peerNodeId: string, text: string): Promise<MessageView | null>
+  sendText(peerNodeId: string, text: string, replyTo?: string): Promise<MessageView | null>
   resendMessage(msgId: string): Promise<boolean>
   recallMessage(msgId: string): Promise<boolean>
   sendNudge(peerNodeId: string): Promise<NudgeResult>
@@ -888,18 +896,20 @@ export interface PantryApi {
     peerNodeId: string,
     name: string,
     bytes: ArrayBuffer,
-    tableText?: TableTextMeta
+    tableText?: TableTextMeta,
+    meta?: ImageMessageMeta
   ): Promise<MessageView | null>
   /** 磁盘上的图片文件按图片消息发送（拖拽/选择器入口） */
-  offerImagePath(peerNodeId: string, path: string): Promise<MessageView | null>
+  offerImagePath(peerNodeId: string, path: string, meta?: ImageMessageMeta): Promise<MessageView | null>
   /** 群聊图片：≤10MB 按图片 offer，超限退化为普通文件 offer */
   sendGroupImageBytes(
     groupId: string,
     name: string,
     bytes: ArrayBuffer,
-    tableText?: TableTextMeta
+    tableText?: TableTextMeta,
+    meta?: ImageMessageMeta
   ): Promise<MessageView | null>
-  offerGroupImagePath(groupId: string, path: string): Promise<MessageView | null>
+  offerGroupImagePath(groupId: string, path: string, meta?: ImageMessageMeta): Promise<MessageView | null>
   /** 在独立图片窗口中查看，不遮挡主聊天窗口 */
   openImageViewer(transferId: string): Promise<boolean>
   /** 图片窗口按当前消息查询同一会话的前后图片。 */

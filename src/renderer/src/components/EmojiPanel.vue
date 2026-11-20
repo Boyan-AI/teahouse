@@ -33,6 +33,8 @@ async function importStickers(): Promise<void> {
     importLabelTimer = null
   }, 2000)
 }
+/** 管理与发送分离，右键不再有破坏性动作。 */
+function openManager(): void { void window.pantry.openStickerManager() }
 </script>
 
 <template>
@@ -42,6 +44,7 @@ async function importStickers(): Promise<void> {
         <PantryIcon name="smile" :size="15" />{{ tr('表情') }}</button>
       <button :class="{ on: tab === 'sticker' }" @click="tab = 'sticker'">
         <PantryIcon name="sticker" :size="15" />{{ tr('表情包') }}</button>
+      <button type="button" @click="openManager()">{{ tr('管理') }}</button>
       <button
         class="import-button"
         type="button"
@@ -67,13 +70,13 @@ async function importStickers(): Promise<void> {
 
     <div v-else class="grid sticker-grid" :class="{ 'is-empty': stickers.list.length === 0 }">
       <div
-        v-for="(s, index) in stickers.list"
+        v-for="s in stickers.list"
         :key="s.id"
         class="stk"
         :class="{ disabled: !props.stickerEnabled }"
-        :title="props.stickerEnabled ? tr('点击发送，右键删除') : tr('当前会话不可发表情包')"
+        :title="props.stickerEnabled ? tr('点击发送') : tr('当前会话不可发表情包')"
         @click="props.stickerEnabled && emit('sticker', s.id)"
-        @contextmenu.prevent="stickers.remove(s.id)"
+        @contextmenu.prevent
       >
         <img
           :src="`pantry-sticker://${s.id}`"
@@ -81,24 +84,6 @@ async function importStickers(): Promise<void> {
           loading="lazy"
           decoding="async"
         />
-        <span class="stk-actions" @click.stop>
-          <button
-            type="button"
-            :aria-label="tr('上移表情')"
-            :disabled="index === 0"
-            @click="stickers.move(s.id, -1)"
-          >
-            <PantryIcon name="chevron-up" :size="12" />
-          </button>
-          <button
-            type="button"
-            :aria-label="tr('下移表情')"
-            :disabled="index === stickers.list.length - 1"
-            @click="stickers.move(s.id, 1)"
-          >
-            <PantryIcon name="chevron-down" :size="12" />
-          </button>
-        </span>
       </div>
       <p v-if="stickers.list.length === 0" class="empty">{{ tr('还没有收藏的表情') }}<br />{{ tr('在聊天图片上右键「添加到表情」') }}</p>
     </div>
@@ -210,32 +195,6 @@ async function importStickers(): Promise<void> {
 .stk img {
   max-width: 100%;
   max-height: 100%;
-}
-.stk-actions {
-  position: absolute;
-  right: 3px;
-  bottom: 3px;
-  display: none;
-  gap: 2px;
-}
-.stk:hover .stk-actions {
-  display: flex;
-}
-.stk-actions button {
-  border: none;
-  width: 18px;
-  height: 18px;
-  border-radius: 3px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  padding: 0;
-}
-.stk-actions button:disabled {
-  opacity: 0.35;
-  cursor: default;
 }
 .empty {
   grid-column: 1 / -1;

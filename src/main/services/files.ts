@@ -1,3 +1,4 @@
+import { parseImageMessageMeta, type ImageMessageMeta } from '../../shared/image-message'
 import type { DiagnosticReporter } from './diagnostics'
 import { systemMessage } from '../../i18n/messages'
 import { randomUUID } from 'node:crypto'
@@ -67,7 +68,7 @@ interface OutgoingState {
   servedFiles?: Set<string>
 }
 
-interface AssemblingOffer {
+interface AssemblingOffer extends ImageMessageMeta {
   peerId: string
   msgId?: string
   parts: Map<number, FileMeta[]>
@@ -166,6 +167,8 @@ export interface FilesDeps {
   allowDirectFileSend?: () => boolean
   /** 展示名：用于默认接收子目录（备注优先可由 main 注入）。 */
   peerDisplayName?: (peerId: string) => string
+  /** 特殊宿主可拒绝非图片或未授权媒体，拒绝后不建传输/不写盘。 */
+  allowOffer?: (peerId: string, offer: FileCtlOffer) => boolean
   bindAddress?: string
 }
 
@@ -252,7 +255,11 @@ export class FilesService extends EventEmitter {
     return false
   }
 
+  /** 停止时取消入站拉流与分包定时器，禁止数据库关闭后迟到回调继续写入。 */
   stop(): Promise<void> {
+    for (const inc of this.incoming.values()) { inc.cancelRef.canceled = true; inc.cancelRef.socket?.destroy() }
+    for (const asm of this.assembling.values()) clearTimeout(asm.timer)
+    this.assembling.clear()
     for (const timer of this.deliveryTimers.values()) clearTimeout(timer)
     this.deliveryTimers.clear()
     if (this.expiryTimer) {
@@ -269,13 +276,16 @@ export class FilesService extends EventEmitter {
     peerId: string,
     paths: string[],
     want: 'file' | 'image' | 'sticker' = 'file',
-    tableTextMeta?: TableTextMeta
+    tableTextMeta?: TableTextMeta,
+    imageMeta?: ImageMessageMeta
   ): Promise<MessageView | null> {
     if (!this.canSend()) return null
     const peer = this.deps.registry.get(peerId)
     if (!peer || !peer.online || paths.length === 0) return null
     const prepared = this.prepareOutgoing(paths, want)
     if (!prepared) return null
+    const media = parseImageMessageMeta(imageMeta)
+    if (!media || (Object.keys(media).length && prepared.purpose !== 'image')) return null
     const transferId = randomUUID()
     const convId = this.deps.convRepo.ensureSingle(peerId)
     const msgId = randomUUID()
@@ -286,7 +296,8 @@ export class FilesService extends EventEmitter {
       size: prepared.totalSize,
       count: prepared.fileCount,
       dir: prepared.hasDir,
-      ...(tableText ?? {})
+      ...(tableText ?? {}),
+      ...media
     }
     const now = Date.now()
     const expiresAt = prepared.purpose ? 0 : now + FILE_OFFER_TTL
@@ -300,11 +311,12 @@ export class FilesService extends EventEmitter {
         prepared.purpose === 'sticker'
           ? '[表情]'
           : prepared.purpose === 'image'
-            ? '[图片]'
+            ? media.caption || '[图片]'
             : `[文件] ${prepared.rootName}`,
       fileRef: JSON.stringify(fileRef),
       ts: now,
-      status: 'sending'
+      status: 'sending',
+      replyTo: media.replyTo
     })
     this.deps.convRepo.bump(convId, now)
     this.deps.transferRepo.insert({
@@ -344,7 +356,7 @@ export class FilesService extends EventEmitter {
     this.emitTransfer(transferId, true)
 
     // offer 分包可靠发送。注意：发送成败要以「数据面真实结果」为准，不能只看 offer 回程 ACK（issue #3）
-    void this.sendOfferPackets(peerId, transferId, prepared, expiresAt, tableText, undefined, msgId).then((ok) => {
+    void this.sendOfferPackets(peerId, transferId, prepared, expiresAt, tableText, undefined, msgId, media).then((ok) => {
       if (ok) {
         this.applyMsgStatus(msgId, 'sent')
         return
@@ -370,7 +382,8 @@ export class FilesService extends EventEmitter {
     groupId: string,
     paths: string[],
     want: 'file' | 'image' | 'sticker' = 'file',
-    tableTextMeta?: TableTextMeta
+    tableTextMeta?: TableTextMeta,
+    imageMeta?: ImageMessageMeta
   ): Promise<MessageView | null> {
     if (!this.canSend()) return null
     const meta = this.deps.groupRepo?.get(groupId)
@@ -384,6 +397,9 @@ export class FilesService extends EventEmitter {
     const prepared = this.prepareOutgoing(paths, want, GROUP_IMG_AUTO_ACCEPT)
     if (!prepared) return null
 
+    const media = parseImageMessageMeta(imageMeta)
+    if (!media || (Object.keys(media).length && prepared.purpose !== 'image')) return null
+    if (media.mentions) media.mentions = media.mentions.filter(id => id === '@all' || meta.members.includes(id))
     const transfers = recipients.map((peerId) => ({ peerId, transferId: randomUUID() }))
     const convId = this.deps.convRepo.ensureGroup(groupId)
     const msgId = randomUUID()
@@ -395,7 +411,8 @@ export class FilesService extends EventEmitter {
       size: prepared.totalSize,
       count: prepared.fileCount,
       dir: prepared.hasDir,
-      ...(tableText ?? {})
+      ...(tableText ?? {}),
+      ...media
     }
     const now = Date.now()
     const expiresAt = prepared.purpose ? 0 : now + FILE_OFFER_TTL
@@ -409,11 +426,12 @@ export class FilesService extends EventEmitter {
         prepared.purpose === 'sticker'
           ? '[表情]'
           : prepared.purpose === 'image'
-            ? '[图片]'
+            ? media.caption || '[图片]'
             : `[文件] ${prepared.rootName}`,
       fileRef: JSON.stringify(fileRef),
       ts: now,
-      status: 'sending'
+      status: 'sending',
+      replyTo: media.replyTo
     })
     this.deps.convRepo.bump(convId, now)
 
@@ -467,7 +485,8 @@ export class FilesService extends EventEmitter {
             groupId,
             groupRev: meta.rev
           },
-          msgId
+          msgId,
+          media
         ).then((ok) => {
           // offer 回程 ACK 丢失但对方已接受/数据已送达时不翻失败（issue #3）
           if (!ok) {
@@ -681,7 +700,8 @@ export class FilesService extends EventEmitter {
     expiresAt: number,
     tableText: TableTextMeta | undefined,
     group?: GroupOfferContext,
-    msgId?: string
+    msgId?: string,
+    media?: ImageMessageMeta
   ): Promise<boolean> {
     const totalPackets = Math.ceil(prepared.metas.length / OFFER_FILES_PER_PACKET)
     for (let i = 0; i < totalPackets; i++) {
@@ -699,6 +719,7 @@ export class FilesService extends EventEmitter {
         fileCount: prepared.fileCount,
         rootName: prepared.rootName,
         ...(msgId ? { msgId } : {}),
+        ...(media ?? {}),
         ...(expiresAt > 0 ? { expiresAt } : {}),
         ...(prepared.purpose ? { purpose: prepared.purpose } : {}),
         ...(tableText && this.peerSupportsTableText(peerId) ? tableText : {}),
@@ -798,17 +819,21 @@ export class FilesService extends EventEmitter {
       cancelRef,
       supportsWait: this.peerSupportsTransferWait(inc.peerId),
       onProgress: (delta, transferredDelta = delta) => {
+        if (cancelRef.canceled) return
         inc.bytesDone += delta
         inc.bytesTransferred = (inc.bytesTransferred ?? 0) + transferredDelta
         this.emitTransfer(transferId, false)
       },
       onQueued: (queued) => {
+        if (cancelRef.canceled) return
         if (inc.queued === queued) return
         inc.queued = queued
         this.emitTransfer(transferId, true)
       }
     })
       .then(async () => {
+        // 停止/取消后先检查再读库，避免成功回调晚于数据库关闭。
+        if (cancelRef.canceled) return
         const msg = this.deps.msgRepo.get(inc.msgId)
         if ((msg?.kind === 'image' || msg?.kind === 'sticker') && this.deps.validateReceivedImage) {
           let valid = false
@@ -1096,6 +1121,7 @@ export class FilesService extends EventEmitter {
 
   private onOfferPart(peerId: string, offer: FileCtlOffer, envelopeTs: number): void {
     if (this.deps.transferRepo.get(offer.transferId)) return // 重复 offer（dedup 之外的兜底）
+    if (this.deps.allowOffer && !this.deps.allowOffer(peerId, offer)) { void this.declineUnknown(peerId, offer.transferId); return }
     let asm = this.assembling.get(offer.transferId)
     if (!asm) {
       const now = Date.now()
@@ -1127,6 +1153,7 @@ export class FilesService extends EventEmitter {
             : 0,
         groupId: offer.groupId,
         groupRev: offer.groupRev,
+        caption: offer.caption, mentions: offer.mentions, replyTo: offer.replyTo,
         tableText: offer.tableText,
         tableTextTruncated: offer.tableTextTruncated,
         timer: setTimeout(() => this.assembling.delete(offer.transferId), OFFER_ASSEMBLE_TIMEOUT)
@@ -1147,6 +1174,7 @@ export class FilesService extends EventEmitter {
     }
     if (asm.groupId !== offer.groupId || asm.groupRev !== offer.groupRev) return
     if (asm.tableText !== offer.tableText || asm.tableTextTruncated !== offer.tableTextTruncated) return
+    if (asm.caption !== offer.caption || asm.replyTo !== offer.replyTo || JSON.stringify(asm.mentions) !== JSON.stringify(offer.mentions)) return
     asm.parts.set(offer.seq, offer.files)
     if (asm.parts.size < asm.total) return
 
@@ -1208,6 +1236,7 @@ export class FilesService extends EventEmitter {
     const fileRef: FileRefView = {
       transferId: offer.transferId,
       name: asm.rootName,
+      ...(inPurpose === 'image' ? parseImageMessageMeta({ caption:asm.caption, mentions:asm.mentions, replyTo:asm.replyTo }) ?? {} : {}),
       size: trustedTotalSize,
       count: asm.fileCount,
       dir: plans.some((p) => p.relPath.includes('/')),
@@ -1231,10 +1260,11 @@ export class FilesService extends EventEmitter {
       isMine: false,
       kind: inPurpose ?? 'file',
       content:
-        inPurpose === 'sticker' ? '[表情]' : inPurpose === 'image' ? '[图片]' : `[文件] ${asm.rootName}`,
+        inPurpose === 'sticker' ? '[表情]' : inPurpose === 'image' ? asm.caption || '[图片]' : `[文件] ${asm.rootName}`,
       fileRef: JSON.stringify(fileRef),
       ts: now,
-      status: 'sent'
+      status: 'sent',
+      replyTo: inPurpose === 'image' ? asm.replyTo : undefined
     })
     this.deps.convRepo.bump(convId, now)
     this.deps.convRepo.incUnread(convId)

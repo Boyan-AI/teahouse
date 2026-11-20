@@ -31,4 +31,13 @@ describe('主进程图片大文件 I/O', () => {
     expect(saveAs).toContain('await copyFile(')
     expect(saveAs).not.toContain('copyFileSync(')
   })
+  it('草稿与收藏图源先按体积预检，再异步读取并二次校验', () => {
+    const start=mainSource.indexOf('async function readStickerSource')
+    const source=mainSource.slice(start,mainSource.indexOf('\n  }',start))
+    expect(source.indexOf('await stat(path)')).toBeLessThan(source.indexOf('await readFile(path)'))
+    expect(source).toContain('info.size > IMAGE_SOURCE_MAX_BYTES')
+    expect(source).toContain('buf.length > IMAGE_SOURCE_MAX_BYTES')
+    expect(source).toContain('imagePreview.isInlineNamedBytes(path, buf)')
+  })
+
 })

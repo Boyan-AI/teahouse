@@ -67,4 +67,18 @@ describe('内网 Anthropic 兼容服务', () => {
     for (const url of ['http://10.0.0.1:8000', 'http://172.16.1.1/prefix', 'https://192.168.0.2', 'http://127.0.0.1']) expect(agentEndpoint(url)).not.toBeNull()
     expect(isAgentInput({ name: 'a', persona: '', model: 'm', enabled: true, endpoint: 'http://127.0.0.1', apiKey: 'key\nInjected: bad' })).toBe(false)
   })
+  it('官方 SDK 同条请求携带 base64 图片与说明，不发送远程 URL', async () => {
+    let actual: unknown
+    const config = await mock((req,res) => {
+      let body=''; req.on('data',chunk=>{body+=chunk}); req.on('end',()=>{actual=JSON.parse(body);reply(res,'图像已收到')})
+    })
+    const image={type:'image' as const,source:{type:'base64' as const,media_type:'image/png' as const,data:'cG5n'}}
+    expect(await requestAgent(config,'secret',[{role:'user',content:'说明和引用',images:[image]}],new AbortController().signal)).toBe('图像已收到')
+    expect(actual).toMatchObject({messages:[{role:'user',content:[image,{type:'text',text:'说明和引用'}]}]})
+  })
+  it.each([400,413,422])('视觉接口拒绝 %i 时明确提示且不泄露模型正文', async status => {
+    const config=await mock((_req,res)=>{res.writeHead(status);res.end('secret-private-model-error')})
+    await expect(requestAgent(config,'secret',[{role:'user',content:'识图',images:[{type:'image',source:{type:'base64',media_type:'image/png',data:'cG5n'}}]}],new AbortController().signal)).rejects.toThrow('模型无法处理图片，请检查视觉能力、图片格式与服务限制')
+  })
+
 })

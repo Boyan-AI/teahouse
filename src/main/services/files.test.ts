@@ -295,6 +295,46 @@ describe('issue #48 传输结果与监听失败', () => {
     return { service, deps, dir, path, messenger, msgRepo, transferRepo, server, ctl, incoming }
   }
 
+  it('发送图文时说明和引用与图片共用一条消息和控制帧', async () => {
+    const {service,path,messenger,msgRepo}=setup()
+    const meta={caption:'说明 **重点**',replyTo:'source'}
+    const message=await service.offerPaths('node-bob',[path],'image',undefined,meta)
+    expect(message).toMatchObject({kind:'image',text:meta.caption,fileRef:meta,replyTo:'source'})
+    expect(msgRepo.rows.size).toBe(1)
+    expect(msgRepo.get(message!.id)?.reply_to).toBe('source')
+    expect(messenger.sent.find(item=>item.env.payload.op==='offer')?.env.payload).toMatchObject(meta)
+  })
+
+  it('接收图文保存同一条正文、引用与受限元数据', async () => {
+    vi.spyOn(transferNet,'pullTransfer').mockResolvedValue()
+    const {ctl,msgRepo}=setup()
+    ctl({op:'offer',transferId:'image-caption',seq:1,total:1,fileCount:1,rootName:'a.png',files:[{fileId:'f',path:'a.png',size:5}],totalSize:5,purpose:'image',caption:'接收说明',replyTo:'source',mentions:['agent']})
+    await waitFor(()=>msgRepo.rows.size===1)
+    const message=[...msgRepo.rows.values()][0]
+    expect(message).toMatchObject({kind:'image',content:'接收说明',reply_to:'source'})
+    expect(JSON.parse(message.file_ref!)).toMatchObject({caption:'接收说明',replyTo:'source',mentions:['agent']})
+  })
+
+  it('停止后迟到的拉流成功/进度回调不再查询已关闭数据库', async () => {
+    let finish!:()=>void
+    const pull=vi.spyOn(transferNet,'pullTransfer').mockImplementation(()=>new Promise(resolve=>{finish=resolve}))
+    const {service,incoming,msgRepo}=setup()
+    incoming('image');await waitFor(()=>pull.mock.calls.length===1)
+    await service.stop()
+    const get=vi.spyOn(msgRepo,'get');get.mockClear()
+    const options=pull.mock.calls[0][0]
+    options.onProgress?.(1);options.onQueued?.(true);finish();await waitTick()
+    expect(get).not.toHaveBeenCalled()
+  })
+
+  it('宿主拒绝 offer 时不创建传输与消息，并返回拒收', async () => {
+    const allowOffer=vi.fn().mockReturnValue(false)
+    const {incoming,msgRepo,transferRepo,messenger}=setup(undefined,{allowOffer})
+    incoming('image')
+    expect(allowOffer).toHaveBeenCalledOnce();expect(msgRepo.rows.size).toBe(0);expect(transferRepo.rows.size).toBe(0)
+    expect(messenger.sent[0].env.payload).toEqual({op:'decline',transferId:'incoming'})
+  })
+
   it('#54：真实续传包含已有字节，重复 pull 不重复累加，新一轮接收重置测速', async () => {
     const { service, path, messenger, ctl } = setup()
     const body = Buffer.from('abcdefghijklmnop')

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { ImageMessageMeta } from '../../../shared/image-message'
 import { tr } from '../utils/i18n'
 import type { ScreenState, ScreenAvailability } from '../../../shared/remote-view'
 import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -1124,51 +1125,50 @@ function insertTextAtCursor(text: string): number {
   return start
 }
 
-async function submitAttachment(item: PendingAttachment, valid: () => boolean): Promise<boolean> {
+/** 确认发送时才授权/读图；说明和引用跟随图片同一条投递。 */
+async function submitAttachment(item: PendingAttachment, valid: () => boolean, meta?: ImageMessageMeta): Promise<boolean> {
   if (!valid() || !canSendMedia.value) return false
   if (item.path) {
     // 确认后才申请一次性授权；每次 await 后复核会话/取消代次。
     const paths = await grantLocalFilePaths([item.path])
     if (!valid() || !canSendMedia.value || paths.length !== 1) return false
-    return item.image ? chatStore.sendImagePath(paths[0]) : chatStore.sendFilePaths(paths)
+    return item.image ? chatStore.sendImagePath(paths[0], meta) : chatStore.sendFilePaths(paths)
   }
   const bytes = await item.file.arrayBuffer()
   if (!valid() || !canSendMedia.value) return false
-  return chatStore.sendImageBytes(item.name, bytes)
+  return chatStore.sendImageBytes(item.name, bytes, undefined, meta)
 }
 
+/** 附件正文只绑定首张图片，失败恢复未发文字，不产生额外 AI 触发消息。 */
 async function send(): Promise<void> {
   if (sendDisabled.value) return
-  const text = draft.value.trim()
-  const originalDraft = draft.value
-  const generation = attachments.token()
-  const convId = chatStore.activeConvId
-  const mentions = isGroup.value
-    ? [...new Set(mentionIds.value)].filter((id) =>
-        id === MENTION_ALL
-          ? hasMentionAllToken(text)
-          : text.includes(`@${peersStore.nameOf(id)}`)
-      )
-    : []
+  const text = draft.value.trim(), originalDraft = draft.value
+  const generation = attachments.token(), convId = chatStore.activeConvId
+  const mentions = isGroup.value ? [...new Set(mentionIds.value)].filter(id => id === MENTION_ALL
+    ? hasMentionAllToken(text) : text.includes('@'+peersStore.nameOf(id))) : []
   const id = replyToId.value || undefined
-  await attachments.send(submitAttachment, text ? async () => {
-    // 同步摘下本次文字，发送期间继续输入不会带着已发正文再发一次。
-    draft.value = ''
-    mentionIds.value = []
-    closeMentionPicker()
-    replyToId.value = null
-    const restore = (): void => {
-      if (!attachments.isCurrent(generation) || chatStore.activeConvId !== convId) return
-      draft.value = originalDraft + (draft.value ? '\n' + draft.value : '')
-      mentionIds.value = [...new Set([...mentions, ...mentionIds.value])]
-      if (!replyToId.value) replyToId.value = id ?? null
-    }
-    try {
-      const ok = await chatStore.send(text, mentions, id)
-      if (!ok) restore()
-      return ok
-    } catch (error) { restore(); throw error }
+  const image = attachments.items.value.find(item => item.image)
+  let captionSent = false, detached = false
+  /** 只恢复同一草稿，不能覆盖发送期间的新输入或另一会话。 */
+  const restore = (): void => {
+    if (!detached || !attachments.isCurrent(generation) || chatStore.activeConvId !== convId) return
+    draft.value = originalDraft + (draft.value ? '\n'+draft.value : '')
+    mentionIds.value = [...new Set([...mentions,...mentionIds.value])]
+    if (!replyToId.value) replyToId.value = id ?? null
+    detached = false
+  }
+  await attachments.send(async (item, valid) => {
+    const combined = item.id === image?.id
+    const ok = await submitAttachment(item, valid, combined ? {caption:text,mentions,replyTo:id} : undefined)
+    if (combined && ok) captionSent = true
+    return ok
+  }, text || image ? async () => {
+    draft.value = ''; mentionIds.value = []; closeMentionPicker(); replyToId.value = null; detached = true
+    if (image) return true
+    try { const ok = await chatStore.send(text,mentions,id); if (!ok) restore(); return ok }
+    catch (error) { restore(); throw error }
   } : undefined)
+  if (image && !captionSent) restore()
 }
 
 async function sendClipboardImageFallback(event?: Event): Promise<boolean> {
@@ -1410,6 +1410,7 @@ function applyMention(nodeId: string, at: number, end: number): void {
   })
 }
 
+/** 通用复制只处理文本，图片由自己的菜单复制真实位图。 */
 function canCopyMessage(msg: MessageView): boolean {
   return msg.kind === 'text' && msg.status !== 'recalled'
 }
@@ -1519,8 +1520,9 @@ function canForwardMessage(msg: MessageView): boolean {
   return msg.status !== 'recalled' && msg.kind !== 'system' && msg.kind !== 'pk'
 }
 
+/** 私聊和群聊均允许引用文本/图片，不允许引用已撤回消息。 */
 function canQuoteMessage(msg: MessageView): boolean {
-  return msg.kind === 'text' && msg.status !== 'recalled'
+  return (msg.kind === 'text' || msg.kind === 'image') && msg.status !== 'recalled'
 }
 
 function quoteSelectedMessage(): void {
@@ -1535,7 +1537,7 @@ function messageMenuItemCount(msg: MessageView): number {
     Number(canCopyMessage(msg)) +
     Number(canForwardMessage(msg)) +
     Number(isRecallableKind(msg)) +
-    Number(canQuoteMessage(msg) && isGroup.value)
+    Number(canQuoteMessage(msg))
   )
 }
 
@@ -1613,11 +1615,25 @@ async function sendFiles(directory: boolean): Promise<void> {
   if (paths) await chatStore.sendFilePaths(paths)
 }
 
+/** 图片选择先读入受限草稿；读取失败明确提示，不能悄悄丢掉用户的选择。 */
 async function sendImage(): Promise<void> {
   if (!canSendMedia.value) return
   const paths = await window.pantry.pickImages()
   if (!paths) return
-  for (const path of paths) await chatStore.sendImagePath(path)
+  // 选择图片先进入草稿，让说明文字与图片一次发送。
+  const convId = chatStore.activeConvId, generation = attachments.token()
+  let failed = false
+  for (const path of paths) {
+    try {
+      const source = await window.pantry.readImageDraft(path)
+      if (chatStore.activeConvId !== convId || !attachments.isCurrent(generation)) return
+      if (source) attachments.add(new Blob([source.bytes]), path.split(/[\\/]/).pop() || 'image.png')
+      else failed = true
+    } catch { failed = true }
+  }
+  if (chatStore.activeConvId !== convId || !attachments.isCurrent(generation)) return
+  if (failed) alert(tr('部分图片无法读取，请检查格式、大小与文件是否存在'))
+  focusInput()
 }
 
 interface ClipboardImagePayload {
@@ -1829,7 +1845,8 @@ async function onDrop(event: DragEvent): Promise<void> {
   if (granted.length === 0) return
   // 单张图片拖入 → 按图片消息发；其余按文件
   if (granted.length === 1 && isImagePath(granted[0])) {
-    await chatStore.sendImagePath(granted[0])
+    const file = Array.from(event.dataTransfer.files).find(file => (file as File & {path?:string}).path === granted[0])
+    if (file) attachments.add(file,file.name,granted[0])
   } else {
     await chatStore.sendFilePaths(granted)
   }
@@ -2158,6 +2175,7 @@ async function onDrop(event: DragEvent): Promise<void> {
         @contextmenu="openMessageMenu"
         @forward="forwardMsg = $event"
         @recall="recallMessage"
+        @quote="replyToId = $event.id"
         @reply-to="jumpToReplyTarget"
         @participate-pk="sendPk"
         @resend="chatStore.resend"
@@ -2185,7 +2203,7 @@ async function onDrop(event: DragEvent): Promise<void> {
     >
       <button v-if="canCopyMessage(msgMenu.msg)" @click="copySelectedMessage">{{ tr('复制') }}</button>
       <button v-if="canForwardMessage(msgMenu.msg)" @click="forwardSelectedMessage">{{ tr('转发') }}</button>
-      <button v-if="canQuoteMessage(msgMenu.msg) && isGroup && !msgMenu.msg.isMine" @click="quoteSelectedMessage">{{ tr('引用回复') }}</button>
+      <button v-if="canQuoteMessage(msgMenu.msg)" @click="quoteSelectedMessage">{{ tr('引用回复') }}</button>
       <button
         v-if="isRecallableKind(msgMenu.msg)"
         class="danger recall-action"

@@ -154,14 +154,15 @@ export class ChatService extends EventEmitter {
   }
 
   /** 发文本：入库（sending）→ 立即回显 → 异步走网络，结果经 status 事件回推 */
-  sendText(peerId: string, text: string): MessageView | null {
+  sendText(peerId: string, text: string, replyTo?: string): MessageView | null {
     const trimmed = text.trim()
     if (!trimmed || Buffer.byteLength(trimmed, 'utf8') > TEXT_TCP_LIMIT) return null
 
     const convId = this.deps.convRepo.ensureSingle(peerId)
     const env = makeEnvelope<MsgPayload>(MSG_TYPES.msg, this.deps.selfId, {
       kind: 'text',
-      text: trimmed
+      text: trimmed,
+      ...(replyTo ? { replyTo } : {})
     })
     this.deps.msgRepo.insert({
       id: env.id,
@@ -170,6 +171,7 @@ export class ChatService extends EventEmitter {
       isMine: true,
       kind: 'text',
       content: trimmed,
+      replyTo,
       ts: env.ts,
       status: 'sending'
     })
@@ -264,7 +266,7 @@ export class ChatService extends EventEmitter {
       id: row.id,
       from: this.deps.selfId,
       ts: row.ts,
-      payload: { kind: 'text', text: row.content, resend: true }
+      payload: { kind: 'text', text: row.content, resend: true, ...(row.reply_to ? {replyTo:row.reply_to} : {}) }
     }
     this.applyStatus(msgId, 'sending')
     void this.deps.messenger.sendUserMessage(peerId, env).then((outcome) => {
@@ -342,6 +344,7 @@ export class ChatService extends EventEmitter {
       isMine: false,
       kind: 'text',
       content: payload.text,
+      replyTo: payload.replyTo,
       ts,
       status: 'sent'
     })

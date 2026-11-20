@@ -194,6 +194,21 @@ Click **AI** beside the contact search field to open **Agent manager**. Enter a 
 - Only direct messages, explicit group mentions and a bounded reply context are sent to the model—not the entire unmentioned group history. Each Agent processes requests serially: 8 queued requests, 32 contexts, 12 context messages, a 60-second total deadline, 1024 output tokens, a 64-KiB response body limit and 4096 UTF-8 bytes per chat reply. No tool execution, web search or autonomous background actions are provided.
 - Model calls are refused when SDK `DEBUG=true` would expose request data and keys. User-visible failures are sanitized.
 
+### Images with captions and AI replies
+
+Picking, dropping or pasting an image adds a pending attachment. Type a caption and send once: the text belongs to the first image, not a separate text message that would trigger the Agent early. Multiple images remain separate messages, not an album. Direct and group chats can quote text or images; the image menu includes **Quote reply**. Forwarding retains the caption but not the original conversation's quote ID or mention intent. Older clients may display only the image; update participants together.
+
+- Agents receive real base64 image bytes and the caption through the configured Anthropic-compatible endpoint. The LAN model must support vision. Rejected image requests produce an explicit error rather than silently pretending to analyze the image as text.
+- Current AI images support PNG/JPEG/GIF/WebP, up to 5 MiB each, with the existing 8192-pixel maximum edge and 32-million-pixel guard. Each Agent has a 128-MiB local image cache/receive-reservation budget. Failed-transfer reservations are recalculated from actual disk usage when the Agent is enabled again; caches are not automatically deleted. Ordinary files are not sent to the model.
+- Quotes are resolved from the Agent's own received messages in the same conversation, never from sender-supplied quote text. Missing, cross-conversation or recalled quotes are marked unavailable. Incomplete or unavailable quoted images are identified explicitly; quote chains are not recursively traversed.
+- Group image requests still require an explicit mention of that Agent. Unmentioned group images stay on the Agent's host for later explicit quoting; they do not cause the entire group history to be uploaded. Recalling content after a model request cannot retract data already received by the model service. Bounded earlier text context is not a server-side erasure mechanism either.
+
+### Manage sticker favorites
+
+Click **Manage** in the chat emoji/sticker panel to open a separate window. Import local images, drag to reorder, use move buttons or Alt + Left/Right, select all and batch-delete. Order is saved automatically, synchronized to the sending panel and retained when reopened. Right-clicking a favorite no longer deletes it.
+
+Deletion requires confirmation and **removes only the favorite index—not chat history or local assets that historical/in-flight messages may still reference**. This is not disk cleanup or secure erasure. There is no store, cloud synchronization or external download.
+
 ### Gomoku and Chinese chess
 
 In a direct or group conversation, choose **Gomoku** or **Chinese chess** from **PK**. The creator opens an independent board; recipients click an invitation card to join. Opening the same game from PK in the same conversation reuses an existing active room. At least one online peer with board-game support is required. Older clients are never forced to open a window.
@@ -210,4 +225,4 @@ Message bodies support bold, italic, strikethrough, headings, lists, quotes, inl
 
 This is a limited Markdown subset: HTML/scripts are never executed and remote message images are never loaded (Markdown images show their description only). Code and wide tables scroll inside the message. Links use the existing controlled opening path. Board invitations are dedicated cards showing the inviter, game and room; click **Join game / Spectate** to enter.
 
-Developer validation: run `npm run build`, then `npm run test:extensions`. The script launches three isolated Electron clients and uses loopback networking only to verify real wins, rematches, spectators, invitation cards, avatars, the Agent form, and Markdown through a local model mock and the production SDK/Agent/P2P path. Screenshots and results are saved under `out/extension-ui-*`; no real model service is called.
+Developer validation: run `npm run build`, then `npm run test:extensions`. The script launches three isolated Electron clients and uses loopback networking only to verify real wins, rematches, spectators, invitation cards, avatars, the Agent form, Markdown through a local model mock and the production SDK/Agent/P2P path, pasted captioned images, image quotes, sticker drag/keyboard ordering, reopen persistence, cross-window synchronization and confirmed/batch deletion (confirmation responses are supplied by the isolated test). Screenshots and results are saved under `out/extension-ui-*`; no real model service is called.

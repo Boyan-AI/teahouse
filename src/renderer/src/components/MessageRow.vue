@@ -42,6 +42,7 @@ const emit = defineEmits<{
   contextmenu: [event: MouseEvent, msg: MessageView]
   forward: [msg: MessageView]
   recall: [msg: MessageView]
+  quote: [msg: MessageView]
   'participate-pk': [game: PkGame]
   resend: [msgId: string]
   'reply-to': [msgId: string]
@@ -165,6 +166,7 @@ const replyMeta = computed((): ReplyMeta => {
         :recall-visible="props.recallVisible"
         :recall-disabled-reason="props.recallDisabledReason"
         @forward="emit('forward', props.msg)"
+        @quote="emit('quote', props.msg)"
         @recall="emit('recall', props.msg)"
       />
       <BoardGameInvite v-else-if="props.msg.boardRef" :invite="props.msg.boardRef" :inviter-name="props.senderName" class="message-surface" />

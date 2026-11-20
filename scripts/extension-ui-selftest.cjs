@@ -48,6 +48,14 @@ async function client() {
   const net = require('node:net'), listen = net.Server.prototype.listen, connect = net.createConnection
   net.Server.prototype.listen = function (port, address, ...rest) { assert.equal(address, '127.0.0.1'); return listen.call(this, port, address, ...rest) }
   net.createConnection = function (options, ...rest) { assert.equal(options.host, '127.0.0.1'); return connect.call(this, options, ...rest) }
+  // 仅为显式排队的隔离夹具代答原生选图；其余操作仍使用真实系统选择器。
+  const { dialog } = require('electron'), showOpenDialog = dialog.showOpenDialog.bind(dialog)
+  let nextPickedFiles = null
+  dialog.showOpenDialog = (...args) => {
+    if (!nextPickedFiles) return showOpenDialog(...args)
+    const filePaths = nextPickedFiles; nextPickedFiles = null
+    return Promise.resolve({canceled:false,filePaths})
+  }
   const errors = []
   app.on('browser-window-created', (_event, win) => {
     win.webContents.on('console-message', (_e, _level, message) => {
@@ -68,6 +76,10 @@ async function client() {
       let value
       if (r.op === 'exit') { app.exit(0); return }
       if (r.op === 'errors') value = errors
+      else if (r.op === 'picker') {
+        assert(r.files.every(file=>fs.realpathSync(file).startsWith(path.dirname(c.data)+path.sep)),'选图夹具必须在本次隔离目录内')
+        nextPickedFiles = r.files; value = true
+      }
       else if (r.op === 'windows') value = windows.map(w => w.webContents.getURL())
       else if (!win) throw new Error('窗口不存在：' + r.route)
       else if (r.op === 'capture') {
@@ -92,6 +104,7 @@ async function run() {
   const ports = await Promise.all(['udp', 'tcp', 'udp', 'tcp', 'udp', 'tcp'].map(freePort))
   const clients = []
   let modelServer = null, modelRequests = 0
+  const modelBodies = []
   /** 启动真实桌面进程并等待其生产窗口就绪。 */
   const start = async (index, name) => {
     const log = process.env.PANTRY_UI_KEEP ? fs.openSync(path.join(output, 'client-' + index + '.log'), 'a') : null
@@ -147,25 +160,32 @@ async function run() {
     /** 按 DOM 真正点击，等待双端快照一致，不手改客户端状态。 */
     const click = (self, selector, route = 'main') => self.js(`document.querySelector(${JSON.stringify(selector)}).click()`, route)
     const snapshot = (self, route) => self.js("window.pantry.getBoardGame(new URLSearchParams(location.hash.split('?')[1]).get('room'))", route)
-    // 试用模式保留两个干净客户端，棋盘不预先入座/开局，让用户亲自操作。
+    /** 通过真实粘贴事件加入附件，正文输入和点击发送均走生产 UI，不占用系统剪贴板。 */
+    const composeImage = async (self, caption) => {
+      await self.js(`(async()=>{const canvas=document.createElement('canvas');canvas.width=160;canvas.height=96;const ctx=canvas.getContext('2d');ctx.fillStyle='#28695c';ctx.fillRect(0,0,160,96);ctx.fillStyle='#fff';ctx.font='20px sans-serif';ctx.fillText('LOCAL IMAGE',12,54);const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));const data=new DataTransfer();data.items.add(new File([blob],'local-image.png',{type:'image/png'}));document.querySelector('textarea.input').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));})()`)
+      await until(()=>self.js('document.querySelectorAll(".attachment-card").length===1'),'图片进入待发送草稿')
+      await self.js('(()=>{const el=document.querySelector("textarea.input");el.value='+JSON.stringify(caption)+';el.dispatchEvent(new Event("input",{bubbles:true}));})()')
+    }
+    /** 试用素材仅在隔离数据库中生成，经生产收藏 IPC 保存。 */
+    const addLocalStickers = self => self.js(`(async()=>{const items=[];for(const color of ['#cb8264','#4f938c','#6c75aa']){const canvas=document.createElement('canvas');canvas.width=96;canvas.height=96;const ctx=canvas.getContext('2d');ctx.fillStyle=color;ctx.fillRect(0,0,96,96);ctx.fillStyle='white';ctx.font='44px sans-serif';ctx.fillText('☺',26,60);const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/webp'));items.push(await window.pantry.addSticker(await blob.arrayBuffer(),'.webp',96,96));}return items})()`)
+    // 试用保留两个独立客户端与管理入口，不启用模型，不接触用户已有数据。
     if (process.env.PANTRY_UI_KEEP) {
-      // 试用消息经真实发送入口产生，不启用 Agent 或访问模型服务。
-      const sample = '**富文本试用**\n- 支持加粗和列表\n- 点击下方邀请卡进入同一棋局\n\n行内代码：`a\\nb`'
+      const sample='**图文与引用试用**\n- 选择或粘贴图片后输入说明，一起发送\n- 文字和图片均可右键引用\n- 表情面板点“管理”，拖动排序或选择删除'
       await a.js('(()=>{const el=document.querySelector("textarea.input");el.value='+JSON.stringify(sample)+';el.dispatchEvent(new Event("input",{bubbles:true}));})()')
       await click(a,'.send')
-      await until(()=>b.js('!!document.querySelector(".rich-message strong")'),'试用富文本展示')
-      await create(a,0)
-      const url = await until(async ()=>(await a.rpc({op:'windows'})).find(url=>url.includes('#/board')),'试用棋盘')
-      const roomId = new URLSearchParams(url.split('?')[1]).get('room')
-      await until(async ()=>(await b.js("window.pantry.pageMessages('single:"+a.nodeId+"',null,100)")).some(m=>m.id==='board:'+roomId),'试用邀请')
-      await create(b,0)
-      await until(async ()=>(await b.rpc({op:'windows'})).some(url=>url.includes(roomId)),'试用同房间')
+      await composeImage(a,'**图文试用**：图片和说明是同一条消息，可右键引用。')
+      await click(a,'.send')
+      await until(()=>b.js('!!document.querySelector(".image-caption strong")'),'试用图文展示')
+      await addLocalStickers(b)
+      await b.js('window.pantry.openStickerManager()')
+      await until(async()=>(await b.rpc({op:'windows'})).some(url=>url.includes('#/stickers')),'试用管理窗口')
+      await until(()=>b.js('document.querySelectorAll(".sticker-tile").length===3','stickers'),'试用收藏列表')
       await click(a,'button[aria-label="Agent 管理"]')
-      await until(async ()=>(await a.rpc({op:'windows'})).some(url=>url.includes('#/agents')),'试用 AI 窗口创建')
-      await until(()=>a.js('!!document.querySelector("#agent-name")','agents'),'试用 AI 管理窗')
-      await a.rpc({op:'capture',route:'board?room='+roomId,file:path.join(output,'preview-board.png')})
-      await a.rpc({op:'capture',route:'agents',file:path.join(output,'preview-agents.png')})
-      console.log('PREVIEW_READY',JSON.stringify({output,roomId,clients:clients.map(c=>({pid:c.child.pid,nodeId:c.nodeId}))}))
+      await until(async()=>(await a.rpc({op:'windows'})).some(url=>url.includes('#/agents')),'试用 AI 窗口')
+      await until(()=>a.js('!!document.querySelector("#agent-name")','agents'),'试用 AI 表单')
+      await b.rpc({op:'capture',route:'stickers',file:path.join(output,'preview-stickers.png')})
+      await b.rpc({op:'capture',file:path.join(output,'preview-caption.png')})
+      console.log('PREVIEW_READY',JSON.stringify({output,clients:clients.map(c=>({pid:c.child.pid,nodeId:c.nodeId}))}))
       for (const c of clients) { c.child.disconnect(); c.child.unref() }
       return
     }
@@ -308,8 +328,8 @@ async function run() {
     modelServer = require('node:http').createServer((req,res)=>{
       assert.equal(req.socket.remoteAddress,'127.0.0.1')
       assert.equal(req.url,'/v1/messages')
-      req.resume()
-      req.on('end',()=>{ modelRequests++; res.setHeader('content-type','application/json'); res.end(JSON.stringify({id:'msg_local',type:'message',role:'assistant',model:'local-test',content:[{type:'text',text:modelText}],stop_reason:'end_turn',stop_sequence:null,usage:{input_tokens:1,output_tokens:1}})) })
+      let body=''; req.on('data',chunk=>{body+=chunk})
+      req.on('end',()=>{ modelBodies.push(JSON.parse(body)); modelRequests++; res.setHeader('content-type','application/json'); res.end(JSON.stringify({id:'msg_local',type:'message',role:'assistant',model:'local-test',content:[{type:'text',text:modelText}],stop_reason:'end_turn',stop_sequence:null,usage:{input_tokens:1,output_tokens:1}})) })
     })
     await new Promise(resolve=>modelServer.listen(0,'127.0.0.1',resolve))
     const modelEndpoint = 'http://127.0.0.1:'+modelServer.address().port
@@ -339,6 +359,30 @@ async function run() {
     assert((await b.js("window.pantry.pageMessages('single:"+agent.id+"',null,100)")).some(m=>!m.isMine && m.text===modelText),'数据库保留原始模型内容')
     assert.equal(modelRequests,1)
     await b.rpc({op:'capture',file:path.join(output,'agent-markdown-chat.png')})
+
+    await composeImage(b,'图文说明：**识别这张图片**')
+    assert.equal(modelRequests,1,'图片入草稿时不提前触发模型')
+    await b.rpc({op:'capture',file:path.join(output,'image-caption-draft.png')})
+    await click(b,'.send')
+    await until(()=>modelRequests===2,'UI 图文进入模型')
+    let blocks=modelBodies.at(-1).messages.at(-1).content
+    assert(blocks.some(block=>block.type==='image' && block.source.type==='base64' && block.source.data.length>50))
+    assert(blocks.some(block=>block.type==='text' && block.text.includes('图文说明：**识别这张图片**')))
+    const captionMessage=await until(async()=>(await b.js("window.pantry.pageMessages('single:"+agent.id+"',null,100)")).find(m=>m.kind==='image' && m.isMine),'图文入库')
+    assert.equal(captionMessage.text,'图文说明：**识别这张图片**')
+    assert.equal((await b.js("window.pantry.pageMessages('single:"+agent.id+"',null,100)")).filter(m=>m.isMine).length,2,'说明不能另发一条文本重复触发模型')
+    await until(()=>b.js('!!document.getElementById('+JSON.stringify('msg-'+captionMessage.id)+')?.querySelector(".image-caption strong")'),'图片说明富文本')
+    await b.js('document.getElementById('+JSON.stringify('msg-'+captionMessage.id)+').querySelector("img.thumb").dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,cancelable:true,clientX:650,clientY:300}))')
+    await until(()=>b.js('Array.from(document.querySelectorAll(".img-bubble .ctx button")).some(el=>el.textContent.includes("引用回复"))'),'图片引用菜单')
+    await b.js('Array.from(document.querySelectorAll(".img-bubble .ctx button")).find(el=>el.textContent.includes("引用回复")).click()')
+    await b.js('(()=>{const el=document.querySelector("textarea.input");el.value="读取被引用的图片";el.dispatchEvent(new Event("input",{bubbles:true}));})()')
+    await click(b,'.send')
+    await until(()=>modelRequests===3,'UI 引用图片进入模型')
+    blocks=modelBodies.at(-1).messages.at(-1).content
+    assert(blocks.some(block=>block.type==='image'))
+    assert(blocks.some(block=>block.type==='text' && block.text.includes('图文说明：') && block.text.includes('读取被引用的图片')))
+    await b.rpc({op:'capture',file:path.join(output,'agent-image-caption-quote.png')})
+
     // 正常聊天也可发送 Markdown；长代码/宽表格只能在内部滚动，不能撑破消息区域。
     await b.js("Array.from(document.querySelectorAll('.conv')).find(el=>el.textContent.includes('联机测试·甲')).click()")
     await until(()=>b.js('!!document.querySelector("textarea.input")'),'普通聊天窗口')
@@ -350,6 +394,84 @@ async function run() {
     await pause(200)
     assert.equal(await b.js('(()=>{const root=document.querySelector(".row.mine .rich-message"),r=root.getBoundingClientRect();return !!root.querySelector("em") && r.left>=0 && r.right<=innerWidth && document.documentElement.scrollWidth<=innerWidth && [root.querySelector("pre"),root.querySelector(".table-scroll")].every(el=>el.scrollWidth>el.clientWidth && ["auto","scroll"].includes(getComputedStyle(el).overflowX))})()'),true,'长代码和宽表格在窄窗内部滚动')
     await b.rpc({op:'capture',file:path.join(output,'markdown-wide-narrow.png')})
+
+    // 普通双端图文也只能产生同一条消息；先从群聊切回对应私聊再检查 DOM。
+    await a.js("Array.from(document.querySelectorAll('.conv')).find(el=>el.textContent.includes('联机测试·乙')).click()")
+    await composeImage(b,'双端图文：图片和说明同一条')
+    await click(b,'.send')
+    const peerImage=await until(async()=>(await a.js("window.pantry.pageMessages('single:"+b.nodeId+"',null,100)")).find(m=>m.kind==='image' && m.text==='双端图文：图片和说明同一条'),'双端图文')
+    await until(()=>a.js('!!document.getElementById('+JSON.stringify('msg-'+peerImage.id)+')?.querySelector("img.thumb")?.naturalWidth'),'接收端真实图片可见')
+    await a.rpc({op:'capture',file:path.join(output,'peer-image-caption.png')})
+    // 从生产发送面板进入管理窗，先验证空态，再创建本地测试素材。
+    await click(b,'button[aria-label="表情"]')
+    await until(()=>b.js('!!document.querySelector(".emoji-scope .tabs")'),'表情面板')
+    await b.js('Array.from(document.querySelectorAll(".emoji-scope .tabs button")).find(el=>el.textContent==="管理").click()')
+    await until(async()=>(await b.rpc({op:'windows'})).some(url=>url.includes('#/stickers')),'表情管理窗口')
+    await until(()=>b.js('!!document.querySelector(".empty")','stickers'),'收藏空态')
+    await b.rpc({op:'capture',route:'stickers',file:path.join(output,'stickers-empty-light.png')})
+    const added=await addLocalStickers(b)
+    assert(added.every(Boolean),'本地收藏入库')
+    await until(()=>b.js('document.querySelectorAll(".sticker-tile").length===3','stickers'),'管理窗同步新增')
+    const original=(await b.js('window.pantry.listStickers()')).map(item=>item.id)
+    await b.js('Array.from(document.querySelectorAll(".emoji-scope .tabs button")).find(el=>el.textContent.includes("表情包")).click()')
+    const panelIds=()=>b.js('Array.from(document.querySelectorAll(".emoji-scope .stk img")).map(el=>el.src.replace("pantry-sticker://",""))')
+    await until(async()=>(await panelIds()).length===3,'发送面板同步新增')
+    // 主窗不能绕过管理页删除或排序；外部拖放也没有内部 dragged ID。
+    await b.js('window.pantry.removeSticker('+JSON.stringify(original[0])+')')
+    assert.equal((await b.js('window.pantry.listStickers()')).length,3)
+    await b.js('document.querySelector(".emoji-scope .stk").dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,cancelable:true}))')
+    assert.equal((await b.js('window.pantry.listStickers()')).length,3,'右键不删除收藏')
+    await b.js(`(()=>{const tiles=document.querySelectorAll('.sticker-tile'),data=new DataTransfer();tiles[0].dispatchEvent(new DragEvent('dragstart',{dataTransfer:data,bubbles:true}));tiles[2].dispatchEvent(new DragEvent('dragover',{dataTransfer:data,bubbles:true,cancelable:true}));tiles[2].dispatchEvent(new DragEvent('drop',{dataTransfer:data,bubbles:true,cancelable:true}));})()`,'stickers')
+    const reordered=[original[1],original[2],original[0]]
+    await until(async()=>JSON.stringify((await b.js('window.pantry.listStickers()')).map(item=>item.id))===JSON.stringify(reordered),'拖动顺序持久化')
+    await until(async()=>JSON.stringify(await panelIds())===JSON.stringify(reordered),'发送面板同步拖动顺序')
+    await b.js('document.querySelector(".sticker-tile").dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowRight",altKey:true,bubbles:true,cancelable:true}))','stickers')
+    const keyboardOrder=[original[2],original[1],original[0]]
+    await until(async()=>JSON.stringify((await b.js('window.pantry.listStickers()')).map(item=>item.id))===JSON.stringify(keyboardOrder),'键盘移动')
+    await b.rpc({op:'capture',route:'stickers',file:path.join(output,'stickers-order-light.png')})
+    await b.rpc({op:'close',route:'stickers'})
+    await until(async()=>!(await b.rpc({op:'windows'})).some(url=>url.includes('#/stickers')),'管理窗彻底关闭')
+    await b.js('window.pantry.openStickerManager()')
+    await until(async()=>(await b.rpc({op:'windows'})).some(url=>url.includes('#/stickers')),'管理窗重新创建')
+    await until(()=>b.js('document.querySelectorAll(".sticker-tile").length===3','stickers'),'重开管理窗')
+    assert.deepEqual(await b.js('Array.from(document.querySelectorAll(".sticker-tile")).map(el=>el.dataset.id)','stickers'),keyboardOrder)
+    // 原生确认的返回值由隔离测试代答，必须先取消无变化，再确认执行实际删除 IPC。
+    await b.js('window.__confirmText="";window.confirm=text=>{window.__confirmText=text;return false};document.querySelector(".sticker-tile .preview").click()','stickers')
+    await click(b,'.delete','stickers')
+    assert.equal((await b.js('window.pantry.listStickers()')).length,3,'取消删除不改变收藏')
+    assert((await b.js('window.__confirmText','stickers')).includes('仅移除收藏'))
+    // 发过的表情被移出收藏后，历史图片仍必须可用。
+    const removed=keyboardOrder[0]
+    await b.js('document.querySelector(".emoji-scope .stk").click()')
+    const sentSticker=await until(async()=>(await a.js("window.pantry.pageMessages('single:"+b.nodeId+"',null,100)")).find(m=>m.kind==='sticker'),'真实表情发送')
+    await until(()=>a.js('!!document.getElementById('+JSON.stringify('msg-'+sentSticker.id)+')?.querySelector("img.thumb")?.naturalWidth'),'历史表情可见')
+    await b.js('void(window.confirm=()=>true)','stickers');await click(b,'.delete','stickers')
+    await until(async()=>(await b.js('window.pantry.listStickers()')).length===2,'确认删除')
+    assert(!(await b.js('window.pantry.listStickers()')).some(item=>item.id===removed))
+    assert.equal(await b.js('(async()=>{const source=await window.pantry.fetchStickerSource('+JSON.stringify(sentSticker.fileRef.transferId)+');return !!source?.bytes.byteLength})()'),true,'移除收藏不删除历史素材')
+    await b.js("document.documentElement.dataset.theme='dark'",'stickers')
+    await b.rpc({op:'size',route:'stickers',size:[580,680]})
+    assert.equal(await b.js('document.documentElement.scrollWidth<=innerWidth','stickers'),true,'管理窄窗无横向溢出')
+    await b.rpc({op:'capture',route:'stickers',file:path.join(output,'stickers-dark-narrow.png')})
+    await b.js('document.querySelector(".toolbar input").click()','stickers');await click(b,'.delete','stickers')
+    await until(async()=>(await b.js('window.pantry.listStickers()')).length===0,'批量删除')
+    await until(()=>b.js('!!document.querySelector(".empty")','stickers'),'删除后空态')
+    // 真正走管理导入按钮、专用选择授权、canvas 压缩及跨窗事件，而非直接入库替代导入。
+    const pickerFixture=path.join(output,'picker-fixture.webp')
+    const sourceBytes=await b.js('(async()=>{const source=await window.pantry.fetchStickerSource('+JSON.stringify(sentSticker.fileRef.transferId)+');return Array.from(new Uint8Array(source.bytes))})()')
+    fs.writeFileSync(pickerFixture,Buffer.from(sourceBytes))
+    await b.rpc({op:'picker',files:[pickerFixture]});await click(b,'.import','stickers')
+    await until(()=>b.js('document.querySelectorAll(".sticker-tile").length===1','stickers'),'管理窗真实导入')
+    assert.equal((await b.js('window.pantry.listStickers()')).length,1,'收藏事件与 IPC 返回不能重复添加')
+    await b.rpc({op:'capture',route:'stickers',file:path.join(output,'stickers-imported-dark.png')})
+    await b.rpc({op:'picker',files:[pickerFixture]});await click(b,'button[aria-label="发送图片"]')
+    await until(()=>b.js('document.querySelectorAll(".attachment-card").length===1'),'图片选择进入草稿')
+    assert.equal(await b.js('window.pantry.readImageDraft('+JSON.stringify(pickerFixture)+')'),null,'已消费的图片路径授权不能重复读盘')
+    await b.js('(()=>{const el=document.querySelector("textarea.input");el.value="选择器图文";el.dispatchEvent(new Event("input",{bubbles:true}));})()')
+    await click(b,'.send')
+    await until(async()=>(await a.js("window.pantry.pageMessages('single:"+b.nodeId+"',null,100)")).some(message=>message.kind==='image'&&message.text==='选择器图文'),'选择器图文双端投递')
+
+
     await a.js("document.documentElement.dataset.theme='dark'", 'agents')
     await a.rpc({op:'size',route:'agents',size:[620,820]})
     await pause(200)

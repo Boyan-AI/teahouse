@@ -42,4 +42,16 @@ describe('扩展独立窗口安全', () => {
     win.handlers.get('closed')(); expect(h.closed).toHaveBeenCalledWith('r1')
     expect(h.windows.owns({ sender: win.webContents } as never, 'r1')).toBe(false)
   })
+  it('表情管理使用独立本地根并隔离其他扩展窗口的写入权限', () => {
+    const h=harness();h.windows.open('stickers','stickers','表情管理');h.windows.open('agents','agents','Agent')
+    const manager=mocks.instances[0],agent=mocks.instances[1]
+    expect(manager.loadFile).toHaveBeenCalledWith(expect.any(String),{hash:'/stickers'})
+    expect(manager.options.webPreferences).toMatchObject({sandbox:true,contextIsolation:true,nodeIntegration:false})
+    expect(h.windows.owns({sender:manager.webContents} as never,'stickers')).toBe(true)
+    expect(h.windows.owns({sender:agent.webContents} as never,'stickers')).toBe(false)
+    h.windows.open('stickers','stickers','表情管理');expect(mocks.instances).toHaveLength(2)
+    manager.handlers.get('closed')();h.windows.open('stickers','stickers','表情管理')
+    expect(mocks.instances).toHaveLength(3)
+  })
+
 })

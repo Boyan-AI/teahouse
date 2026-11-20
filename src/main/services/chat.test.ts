@@ -526,3 +526,19 @@ it('屏幕协助每场一张本地卡片：原位更新、重复幂等，不计�
   expect([...msgRepo.rows.values()][0].is_mine).toBe(0)
   await Promise.resolve()
 })
+
+/** 私聊引用的发送、接收与重发都必须保留同一个源消息 ID。 */
+describe('ChatService 单聊引用',()=>{
+  it('发送与重发保留引用 ID，接收落入既有 reply_to 列',async()=>{
+    const msgRepo=new FakeMsgRepo(),messenger=new FakeMessenger()
+    const chat=new ChatService({selfId:'node-self',convRepo:new FakeConvRepo() as unknown as ConvRepo,msgRepo:msgRepo as unknown as MsgRepo,messenger:messenger as unknown as Messenger})
+    const view=chat.sendText('node-peer','引用问题','source')!
+    expect(messenger.sent[0].env.payload).toMatchObject({kind:'text',replyTo:'source'})
+    expect(msgRepo.get(view.id)?.reply_to).toBe('source')
+    await Promise.resolve()
+    expect(chat.resend(view.id)).toBe(true)
+    expect(messenger.sent.at(-1)?.env.payload).toMatchObject({kind:'text',resend:true,replyTo:'source'})
+    messenger.emit('incoming',{v:1,type:'msg',id:'received-quote',from:'node-peer',ts:Date.now(),payload:{kind:'text',text:'回复问题',replyTo:'source'}})
+    expect(msgRepo.get('received-quote')?.reply_to).toBe('source')
+  })
+})

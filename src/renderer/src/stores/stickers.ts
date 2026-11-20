@@ -15,6 +15,8 @@ export const useStickersStore = defineStore('stickers', {
     async init(): Promise<void> {
       if (this.initialized) return
       this.initialized = true
+      // 每个窗口只订阅一次，管理窗变更实时刷新聊天发送面板。
+      window.pantry.onStickersChanged(list => { this.list = list })
       this.list = await window.pantry.listStickers()
     },
 
@@ -34,7 +36,7 @@ export const useStickersStore = defineStore('stickers', {
             bitmap.width,
             bitmap.height
           )
-          if (added) this.list = [added, ...this.list]
+          if (added) this.list = [added, ...this.list.filter(item=>item.id!==added.id)]
           return added !== null
         }
 
@@ -52,7 +54,7 @@ export const useStickersStore = defineStore('stickers', {
         )
         if (!blob) return false
         const added = await window.pantry.addSticker(await blob.arrayBuffer(), '.webp', w, h)
-        if (added) this.list = [added, ...this.list]
+        if (added) this.list = [added, ...this.list.filter(item=>item.id!==added.id)]
         return added !== null
       } catch {
         return false
@@ -87,6 +89,12 @@ export const useStickersStore = defineStore('stickers', {
     async remove(id: string): Promise<void> {
       await window.pantry.removeSticker(id)
       this.list = this.list.filter((s) => s.id !== id)
+    },
+
+    /** 拖动和键盘均提交完整顺序，由主进程校验后持久化。 */
+    async reorder(ids: string[]): Promise<void> {
+      this.list = await window.pantry.reorderStickers(ids)
+      if(this.list.map(s=>s.id).join(',')!==ids.join(','))throw new Error('stale sticker order')
     },
 
     async move(id: string, delta: -1 | 1): Promise<void> {

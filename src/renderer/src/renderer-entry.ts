@@ -1,11 +1,12 @@
 import type { Component } from 'vue'
 
-export type RendererEntry = 'agents' | 'board' | 'main' | 'settings' | 'capture' | 'image-viewer' | 'remote-view'
+export type RendererEntry = 'stickers' | 'agents' | 'board' | 'main' | 'settings' | 'capture' | 'image-viewer' | 'remote-view'
 
 type RendererRootModule = { default: Component }
 
 /** 根据本地哈希选择独立根，不加载远程内容。 */
 export function resolveRendererEntry(hash: string): RendererEntry {
+  if (hash.startsWith('#/stickers')) return 'stickers'
   if (hash.startsWith('#/agents')) return 'agents'
   if (hash.startsWith('#/board')) return 'board'
   if (hash.startsWith('#/settings')) return 'settings'
@@ -18,6 +19,7 @@ export function resolveRendererEntry(hash: string): RendererEntry {
 /** 各窗口根显式懒加载，保持资源预算可独立核查。 */
 export function loadRendererRoot(entry: RendererEntry): Promise<RendererRootModule> {
   switch (entry) {
+    case 'stickers': return import('./StickersApp.vue')
     case 'agents': return import('./AgentsApp.vue')
     case 'board': return import('./BoardGameApp.vue')
     case 'remote-view':

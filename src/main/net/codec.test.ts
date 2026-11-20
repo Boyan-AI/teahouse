@@ -886,3 +886,21 @@ it.each([MSG_TYPES.entry, MSG_TYPES.alive])('%s 校验可选探活关联标识�
     expect(decode(encode(makeEnvelope(type, 'node-aaaa', { profile: makeProfile(), probeId }))).ok).toBe(false)
   }
 })
+
+/** 网络端与 IPC 共用说明/引用门禁，普通文件不得夹带图文元数据。 */
+describe('图文控制帧白名单', () => {
+  const image={op:'offer',transferId:'image-1',seq:1,total:1,files:[{fileId:'f',path:'a.png',size:10}],totalSize:10,fileCount:1,rootName:'a.png',purpose:'image'}
+  it('接受同一图片上的说明、提及与引用 ID', () => {
+    const env=makeEnvelope(MSG_TYPES.fileCtl,'human',{...image,caption:'说明',mentions:['agent'],replyTo:'source'})
+    expect(decodeTcpEnvelopeObject(env)).toMatchObject({ok:true,env:{payload:{caption:'说明',mentions:['agent'],replyTo:'source'}}})
+  })
+  it.each([{purpose:'file',caption:'说明'},{purpose:'sticker',replyTo:'source'},{caption:'中'.repeat(1366)},{replyTo:{id:'source',text:'不可信原文'}},{mentions:[123]}])('拒绝非法图文载荷 %j', overrides => {
+    expect(decodeTcpEnvelopeObject(makeEnvelope(MSG_TYPES.fileCtl,'human',{...image,...overrides}))).toEqual({ok:false,reason:'bad-payload:file-ctl'})
+  })
+  it('单聊引用只能携带有限 ID', () => {
+    expect(decodeTcpEnvelopeObject(makeEnvelope(MSG_TYPES.msg,'human',{kind:'text',text:'问题',replyTo:'source'}))).toMatchObject({ok:true})
+    // 兼容旧群聊规则：空字符串等同没有引用；对象或超长 ID 始终拒绝。
+    expect(decodeTcpEnvelopeObject(makeEnvelope(MSG_TYPES.msg,'human',{kind:'text',text:'问题',replyTo:''}))).toMatchObject({ok:true})
+    for(const replyTo of ['x'.repeat(65), {id:'source',text:'伪造正文'}])expect(decodeTcpEnvelopeObject(makeEnvelope(MSG_TYPES.msg,'human',{kind:'text',text:'问题',replyTo}))).toMatchObject({ok:false})
+  })
+})

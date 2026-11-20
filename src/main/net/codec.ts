@@ -1,3 +1,4 @@
+import { parseImageMessageMeta } from '../../shared/image-message'
 import { randomUUID } from 'node:crypto'
 import {
   AVATAR_MAX_BYTES,
@@ -175,6 +176,7 @@ function validatePayload(type: string, payload: unknown, textLimit = TEXT_UDP_LI
       const text = (m as { text?: unknown }).text
       if (typeof text !== 'string' || text.length === 0) return false
       if (Buffer.byteLength(text, 'utf8') > textLimit) return false
+      if ((m.kind === 'text' || m.kind === 'group-text') && m.replyTo !== undefined && (typeof m.replyTo !== 'string' || m.replyTo.length > LIMITS.id)) return false
       if (m.kind === 'group-text') {
         if (!isStr(m.groupId, LIMITS.id)) return false
         if (!isInt(m.groupRev) || m.groupRev! < 0) return false
@@ -289,6 +291,8 @@ function validatePayload(type: string, payload: unknown, textLimit = TEXT_UDP_LI
       }
       if (f.op !== 'offer') return false
       const o = f as Partial<FileCtlOffer>
+      const imageMeta = parseImageMessageMeta(Object.fromEntries(['caption','mentions','replyTo'].filter(k => k in o).map(k => [k,(o as Record<string,unknown>)[k]])))
+      if (!imageMeta || (Object.keys(imageMeta).length && (o.purpose !== 'image' || o.fileCount !== 1))) return false
       if (o.msgId !== undefined && !isStr(o.msgId, LIMITS.id)) return false
       if (!isInt(o.seq) || !isInt(o.total) || o.seq! < 1 || o.total! < 1 || o.seq! > o.total!)
         return false

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import RichMessage from './RichMessage.vue'
 import { tr } from '../utils/i18n'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import type { MessageView, TransferView } from '../../../shared/ipc'
@@ -19,7 +20,7 @@ import PantryIcon from './PantryIcon.vue'
 // 图片/表情消息气泡（ui-design §5）：图片 ≤280px 可看大图；表情固定 120px。
 // 右键「添加到表情」（F-MSG-7）。图源走 pantry-img:// 自定义协议。
 
-const emit = defineEmits<{ forward: []; recall: [] }>()
+const emit = defineEmits<{ forward: []; recall: []; quote: [] }>()
 const props = withDefaults(
   defineProps<{
     msg: MessageView
@@ -51,7 +52,7 @@ const hasTableText = computed(
 )
 const showTableText = computed(() => hasTableText.value && tableViewMode.value === 'text')
 const menuHeight = computed(
-  () => MENU_PADDING + MENU_ITEM_HEIGHT * (props.recallVisible ? 4 : 3)
+  () => MENU_PADDING + MENU_ITEM_HEIGHT * (props.recallVisible ? 5 : 4)
 )
 const recallNowTs = ref(Date.now())
 const recallRemaining = computed(() =>
@@ -258,6 +259,7 @@ onUnmounted(() => {
       <div v-else class="ph" :class="{ sticker: isSticker }">
         {{ tr('{0}接收中…', { 0: isSticker ? tr('表情') : tr('图片') }) }}</div>
     </template>
+    <div v-if="props.msg.fileRef?.caption" class="image-caption"><RichMessage :text="props.msg.fileRef.caption" /></div>
     <span v-if="props.msg.isMine" class="delivery-state" :class="{ fail: failed }"
       :title="transfer ? sentTransferTitle(transfer) : undefined" role="status">{{ deliveryText }}</span>
     <div
@@ -267,6 +269,7 @@ onUnmounted(() => {
       @click.stop
     >
       <button type="button" @click="copyImage">{{ tr('复制') }}</button>
+      <button v-if="!isSticker" type="button" @click="menuAt = null; emit('quote')">{{ tr('引用回复') }}</button>
       <button type="button" @click="forwardImage">{{ tr('转发') }}</button>
       <button type="button" @click="addToStickers">{{ tr('添加到表情') }}</button>
       <button

@@ -61,9 +61,11 @@ export class ForwardService {
     if (!transfer?.savedPath) return null
     const purpose = await this.forwardPurpose(row.kind, transfer.savedPath)
     const tableText = purpose === 'image' ? this.tableTextForForward(row.kind, ref) : undefined
+    // 转发只保留图片说明，不把原会话的引用 ID 或 @ 意图带给新会话。
+    const imageMeta = purpose === 'image' && ref.caption ? {caption:ref.caption} : undefined
     return target.type === 'group'
-      ? this.deps.files.offerGroupPaths(target.id, [transfer.savedPath], purpose, tableText)
-      : this.deps.files.offerPaths(target.id, [transfer.savedPath], purpose, tableText)
+      ? this.deps.files.offerGroupPaths(target.id, [transfer.savedPath], purpose, tableText, imageMeta)
+      : this.deps.files.offerPaths(target.id, [transfer.savedPath], purpose, tableText, imageMeta)
   }
 
   private async forwardPurpose(kind: string, path: string): Promise<'file' | 'image' | 'sticker'> {

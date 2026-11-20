@@ -4,7 +4,8 @@ import nodeFetch, { type RequestInit } from 'node-fetch'
 import { agentEndpoint } from '../../../shared/agents'
 import type { AgentConfig } from '../../store/agent-store'
 
-export interface ModelTurn { role: 'user' | 'assistant'; content: string }
+/** 图片使用官方 SDK 的有限 base64 类型，不接受远程资源 URL。 */
+export interface ModelTurn { images?: Anthropic.ImageBlockParam[]; role: 'user' | 'assistant'; content: string }
 
 /** 官方 SDK 只连接显式内网根地址；禁跳转、禁重试、限制响应体和整个请求时长。 */
 export async function requestAgent(config: AgentConfig, key: string, turns: ModelTurn[], signal: AbortSignal): Promise<string> {
@@ -24,7 +25,7 @@ export async function requestAgent(config: AgentConfig, key: string, turns: Mode
   const timer = setTimeout(abort, 60_000)
   try {
     const response = await client.messages.create({ model: config.model, system: config.persona, max_tokens: 1024,
-      messages: turns.slice(-12).map(turn => ({ role: turn.role, content: turn.content.slice(0, 4096) })) }, { signal: deadline.signal })
+      messages: turns.slice(-12).map(turn => ({ role: turn.role, content: turn.images?.length ? [...turn.images, {type: 'text' as const, text:turn.content.slice(0,8192)}] : turn.content.slice(0,8192) })) }, { signal: deadline.signal })
     if ((response.stop_reason as string) === 'refusal') throw new Error('模型拒绝了本次请求')
     const text = response.content.filter(block => block.type === 'text').map(block => block.type === 'text' ? block.text : '').join('\n').trim()
     if (!text) throw new Error('模型未返回文字内容')
@@ -33,6 +34,7 @@ export async function requestAgent(config: AgentConfig, key: string, turns: Mode
   } catch (error) {
     // SDK 错误可能携带服务返回的敏感正文，不透传、不打印。
     if (signal.aborted) throw new Error('请求已取消')
+    if (turns.some(turn => turn.images?.length) && error instanceof Anthropic.APIError && [400,413,422].includes(error.status ?? 0)) throw new Error('模型无法处理图片，请检查视觉能力、图片格式与服务限制')
     if (error instanceof Anthropic.APIError && error.status === 401) throw new Error('模型认证失败，请检查密钥')
     throw new Error('内网模型请求失败，请检查地址、模型、证书与服务状态')
   } finally { clearTimeout(timer); signal.removeEventListener('abort', abort) }

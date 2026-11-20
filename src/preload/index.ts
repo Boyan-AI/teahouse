@@ -1,3 +1,4 @@
+import type { ImageMessageMeta } from '../shared/image-message'
 import { contextBridge, ipcRenderer } from 'electron'
 import {
   IpcChannels,
@@ -61,6 +62,9 @@ ipcRenderer.on(IpcEvents.captureInit, (_event, pngBytes: ArrayBuffer) => {
 
 // 渲染进程一切能力的唯一入口（tech-design §2 安全基线：sandbox + contextBridge）
 const api: PantryApi = {
+  readImageDraft: (path: string) => ipcRenderer.invoke(IpcChannels.imageDraftSource, path),
+  openStickerManager: () => ipcRenderer.invoke(IpcChannels.stickersOpen),
+  onStickersChanged: listener => subscribe(IpcEvents.stickersChanged,listener),
   openAgents: () => ipcRenderer.invoke(IpcChannels.agentsOpen),
   listAgents: () => ipcRenderer.invoke(IpcChannels.agentsList),
   saveAgent: input => ipcRenderer.invoke(IpcChannels.agentsSave, input),
@@ -111,8 +115,8 @@ const api: PantryApi = {
     ipcRenderer.invoke(IpcChannels.convRemove, convId),
   pageMessages: (convId: string, beforeSeq: number | null, limit?: number): Promise<MessageView[]> =>
     ipcRenderer.invoke(IpcChannels.msgPage, convId, beforeSeq, limit),
-  sendText: (peerNodeId: string, text: string): Promise<MessageView | null> =>
-    ipcRenderer.invoke(IpcChannels.msgSend, peerNodeId, text),
+  sendText: (peerNodeId: string, text: string, replyTo?: string): Promise<MessageView | null> =>
+    ipcRenderer.invoke(IpcChannels.msgSend, peerNodeId, text, replyTo),
   resendMessage: (msgId: string): Promise<boolean> =>
     ipcRenderer.invoke(IpcChannels.msgResend, msgId),
   recallMessage: (msgId: string): Promise<boolean> =>
@@ -162,20 +166,22 @@ const api: PantryApi = {
     peerNodeId: string,
     name: string,
     bytes: ArrayBuffer,
-    tableText?: TableTextMeta
+    tableText?: TableTextMeta,
+    meta?: ImageMessageMeta
   ): Promise<MessageView | null> =>
-    ipcRenderer.invoke(IpcChannels.imgSendBytes, peerNodeId, name, bytes, tableText),
-  offerImagePath: (peerNodeId: string, path: string): Promise<MessageView | null> =>
-    ipcRenderer.invoke(IpcChannels.imgOfferPath, peerNodeId, path),
+    ipcRenderer.invoke(IpcChannels.imgSendBytes, peerNodeId, name, bytes, tableText, meta),
+  offerImagePath: (peerNodeId: string, path: string, meta?: ImageMessageMeta): Promise<MessageView | null> =>
+    ipcRenderer.invoke(IpcChannels.imgOfferPath, peerNodeId, path, meta),
   sendGroupImageBytes: (
     groupId: string,
     name: string,
     bytes: ArrayBuffer,
-    tableText?: TableTextMeta
+    tableText?: TableTextMeta,
+    meta?: ImageMessageMeta
   ): Promise<MessageView | null> =>
-    ipcRenderer.invoke(IpcChannels.groupImgSendBytes, groupId, name, bytes, tableText),
-  offerGroupImagePath: (groupId: string, path: string): Promise<MessageView | null> =>
-    ipcRenderer.invoke(IpcChannels.groupImgOfferPath, groupId, path),
+    ipcRenderer.invoke(IpcChannels.groupImgSendBytes, groupId, name, bytes, tableText, meta),
+  offerGroupImagePath: (groupId: string, path: string, meta?: ImageMessageMeta): Promise<MessageView | null> =>
+    ipcRenderer.invoke(IpcChannels.groupImgOfferPath, groupId, path, meta),
   openImageViewer: (transferId: string): Promise<boolean> =>
     ipcRenderer.invoke(IpcChannels.imgOpenViewer, transferId),
   getImageViewerNavigation: (transferId: string): Promise<ImageViewerNavigation | null> =>

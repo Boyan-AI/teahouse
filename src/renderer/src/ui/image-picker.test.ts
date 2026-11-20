@@ -23,7 +23,9 @@ describe('发送图片按钮选择范围', () => {
       'interface ClipboardImagePayload'
     )
     expect(sendImage).toContain('window.pantry.pickImages()')
-    expect(sendImage).toContain('chatStore.sendImagePath(path)')
+    expect(sendImage).toContain('window.pantry.readImageDraft(path)')
+    expect(sendImage).toContain('attachments.add(')
+    expect(sendImage).not.toContain('chatStore.sendImagePath(')
     expect(sendImage).not.toContain('pickFiles(')
     expect(sendImage).not.toContain('sendFilePaths(')
   })

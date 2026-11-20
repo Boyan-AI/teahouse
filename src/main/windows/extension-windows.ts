@@ -14,7 +14,7 @@ export class ExtensionWindows {
   }) {}
 
   /** 独立 renderer 根避免把棋盘和表单资源并入主窗口静态闭包。 */
-  open(key: string, route: 'agents' | 'board', title: string): void {
+  open(key: string, route: 'agents' | 'board' | 'stickers', title: string): void {
     const previous = this.windows.get(key)
     if (previous && !previous.isDestroyed()) { previous.show(); previous.focus(); return }
     const settings = this.deps.settings()

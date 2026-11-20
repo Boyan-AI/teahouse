@@ -25,3 +25,6 @@
 .rich-message .markdown-link { display:inline; border:0; background:transparent; padding:0; color:var(--primary); text-decoration:underline; font:inherit; cursor:pointer; text-align:left; overflow-wrap:anywhere; }
 .rich-message .table-scroll { max-width:100%; overflow-x:auto; margin:.6em 0; } .rich-message table { border-collapse:collapse; font-size:.9em; } .rich-message th,.rich-message td { padding:6px 9px; border:1px solid var(--line); text-align:left; min-width:48px; } .rich-message th { background:var(--bg-list); }
 .rich-message > :first-child { margin-top:0; } .rich-message > :last-child { margin-bottom:0; }
+
+/* 图文说明随富文本按需加载，不扩大主窗启动样式预算。 */
+.image-caption { max-width:280px; padding:10px 12px; border-radius:8px; background:var(--bg-list); color:var(--text-1); white-space:pre-wrap; overflow-wrap:anywhere; }
