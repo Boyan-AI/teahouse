@@ -70,7 +70,11 @@ async function client() {
       if (r.op === 'errors') value = errors
       else if (r.op === 'windows') value = windows.map(w => w.webContents.getURL())
       else if (!win) throw new Error('窗口不存在：' + r.route)
-      else if (r.op === 'capture') { fs.writeFileSync(r.file, (await win.webContents.capturePage()).toPNG()); value = true }
+      else if (r.op === 'capture') {
+        // 等待布局与合成帧，避免 DOM 已更新而截图仍是上一帧。
+        await win.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+        fs.writeFileSync(r.file, (await win.webContents.capturePage()).toPNG()); value = true
+      }
       else if (r.op === 'close') { win.close(); value = true }
       else if (r.op === 'size') { win.setSize(...r.size); win.show(); value = true }
       else value = await win.webContents.executeJavaScript(r.code, true)
@@ -87,6 +91,7 @@ async function run() {
     platform: 'node', target: 'node16', outfile: fixture, logLevel: 'silent' })
   const ports = await Promise.all(['udp', 'tcp', 'udp', 'tcp', 'udp', 'tcp'].map(freePort))
   const clients = []
+  let modelServer = null, modelRequests = 0
   /** 启动真实桌面进程并等待其生产窗口就绪。 */
   const start = async (index, name) => {
     const log = process.env.PANTRY_UI_KEEP ? fs.openSync(path.join(output, 'client-' + index + '.log'), 'a') : null
@@ -144,6 +149,11 @@ async function run() {
     const snapshot = (self, route) => self.js("window.pantry.getBoardGame(new URLSearchParams(location.hash.split('?')[1]).get('room'))", route)
     // 试用模式保留两个干净客户端，棋盘不预先入座/开局，让用户亲自操作。
     if (process.env.PANTRY_UI_KEEP) {
+      // 试用消息经真实发送入口产生，不启用 Agent 或访问模型服务。
+      const sample = '**富文本试用**\n- 支持加粗和列表\n- 点击下方邀请卡进入同一棋局\n\n行内代码：`a\\nb`'
+      await a.js('(()=>{const el=document.querySelector("textarea.input");el.value='+JSON.stringify(sample)+';el.dispatchEvent(new Event("input",{bubbles:true}));})()')
+      await click(a,'.send')
+      await until(()=>b.js('!!document.querySelector(".rich-message strong")'),'试用富文本展示')
       await create(a,0)
       const url = await until(async ()=>(await a.rpc({op:'windows'})).find(url=>url.includes('#/board')),'试用棋盘')
       const roomId = new URLSearchParams(url.split('?')[1]).get('room')
@@ -166,10 +176,12 @@ async function run() {
       const roomId = new URLSearchParams(hostUrl.split('?')[1]).get('room'), route = 'board?room=' + roomId
       console.log('BOARD_TEST', game, roomId)
       await until(async () => (await b.js(`window.pantry.pageMessages('single:${a.nodeId}', null, 100)`)).some(m => m.id === 'board:' + roomId), '收到棋局邀请')
+      await until(()=>b.js('!!document.getElementById("msg-board:'+roomId+'")?.querySelector(".board-invite")'),'特殊棋局卡片')
+      await b.rpc({op:'capture',file:path.join(output,game+'-invitation-card.png')})
       if (game === 'gomoku') await create(b, index)
       else {
-        await until(() => b.js(`!!document.getElementById('msg-board:${roomId}')?.querySelector('button.message-surface')`), '邀请卡')
-        await b.js(`document.getElementById('msg-board:${roomId}').querySelector('button.message-surface').click()`)
+        await until(() => b.js(`!!document.getElementById('msg-board:${roomId}')?.querySelector('.join-board')`), '邀请卡')
+        await b.js(`document.getElementById('msg-board:${roomId}').querySelector('.join-board').click()`)
       }
       try { await until(async () => (await b.rpc({op:'windows'})).some(url => url.includes('#/' + route)), '访客进入同一房间') }
       catch (e) { console.log('JOIN_FAILURE', await b.rpc({op:'windows'}), await b.rpc({op:'errors'})); throw e }
@@ -198,9 +210,30 @@ async function run() {
       await b.rpc({op:'capture',route,file:path.join(output, game + '-guest.png')})
       games.push({game,roomId,plies:av.room.state.plies,seats:av.room.seats})
       if (game === 'gomoku') {
+        // 实际交替落子形成五连，不直接修改棋盘或伪造获胜快照。
+        for (const [step,[self,to]] of [[a,111],[b,114],[a,110],[b,115],[a,109],[b,116],[a,108]].entries()) {
+          await until(()=>self.js('!document.querySelectorAll(".board button")['+to+'].disabled',route),'五连走子回合')
+          await click(self,'.board button:nth-child('+(to+1)+')',route)
+          await until(async ()=>(await snapshot(a,route)).room.state.plies===step+3 && (await snapshot(b,route)).room.state.plies===step+3,'五连盘面同步')
+        }
+        assert.equal((await snapshot(b,route)).room.state.winner,0)
+        for (const self of [a,b]) await until(()=>self.js('!!document.querySelector("dialog.result")?.open',route),'获胜弹窗')
+        // 通配样式不可破坏原生 dialog 的居中定位；同时验证可见边界。
+        for (const self of [a,b]) assert.equal(await self.js('(()=>{const r=document.querySelector("dialog.result").getBoundingClientRect();return Math.abs(r.x+r.width/2-innerWidth/2)<2 && Math.abs(r.y+r.height/2-innerHeight/2)<2 && r.top>=0 && r.bottom<=innerHeight})()',route),true,'结果弹窗必须居中且完整可见')
+        await a.rpc({op:'capture',route,file:path.join(output,'game-winner-dialog.png')})
+        await click(a,'.result .again',route)
+        await until(async ()=>(await snapshot(b,route)).room.ready.includes(a.nodeId),'重开等待同步')
+        assert.equal((await snapshot(b,route)).room.phase,'finished','一人准备不能重开')
+        await click(b,'.result .again',route)
+        await until(async ()=>(await snapshot(a,route)).room.phase==='playing' && (await snapshot(b,route)).room.state.plies===0,'双方确认重开')
+        await until(()=>a.js('!document.querySelector("dialog.result")',route),'新局关闭结果窗')
+        games[games.length-1].winnerDialog=true; games[games.length-1].rematch=true
         await a.js(`window.pantry.actBoardGame('${roomId}', {kind:'resign'})`, route)
         await until(async () => (await snapshot(b, route)).room.phase === 'finished', '认输同步')
-        await a.rpc({op:'close',route}); await b.rpc({op:'close',route})
+        for (const self of [a,b]) {
+          await until(()=>self.js('!!document.querySelector("dialog.result")?.open',route),'认输结果窗')
+          await click(self,'.end-game',route)
+        }
         await until(async () => !(await a.rpc({op:'windows'})).some(url=>url.includes('#/' + route)) && !(await b.rpc({op:'windows'})).some(url=>url.includes('#/' + route)), '棋盘关闭完成')
       }
     }
@@ -247,17 +280,76 @@ async function run() {
     await until(async ()=>(await snapshot(c,groupRoute)).room.state.plies===1,'旁观实时收到走子')
     await c.rpc({op:'capture',route:groupRoute,file:path.join(output,'group-spectator.png')})
     games.push({game:'group-gomoku',roomId:groupRoom,viewers:3,spectator:c.nodeId})
-    // 双主题、窄窗口和真实保存：只创建禁用 Agent，绝不调用真实模型。
+    // 真正获胜保留玩家座位；认输按既有规则离座，不能直接由原座位准备。
+    for (const [step,[self,to]] of [[b,15],[a,1],[b,16],[a,2],[b,17],[a,3],[b,18],[a,4]].entries()) {
+      await until(()=>self.js('!document.querySelectorAll(".board button")['+to+'].disabled',groupRoute),'群获胜走子回合')
+      await click(self,'.board button:nth-child('+(to+1)+')',groupRoute)
+      await until(async ()=>(await snapshot(c,groupRoute)).room.state.plies===step+2,'群获胜同步旁观者')
+    }
+    // 旁观者仅选择继续观看或退出，不可替玩家准备重开。
+    await until(()=>c.js('!!document.querySelector("dialog.result")?.open',groupRoute),'旁观结果窗')
+    assert.equal(await c.js('document.querySelector(".result .again").textContent',groupRoute),'继续旁观')
+    await click(c,'.result .again',groupRoute)
+    assert.equal(await c.js('document.querySelector("dialog.result").open',groupRoute),false)
+    for (const self of [a,b]) {
+      await until(()=>self.js('!!document.querySelector("dialog.result")?.open && !document.querySelector(".result .again").disabled',groupRoute),'玩家可确认下一局')
+      await click(self,'.result .again',groupRoute)
+      await until(async ()=>{const r=(await snapshot(c,groupRoute)).room;return r.phase==='playing'||r.ready.includes(self.nodeId)},'准备广播到房主')
+      if(self===a) await until(async ()=>(await snapshot(b,groupRoute)).room.ready.includes(a.nodeId),'另一玩家收到准备修订')
+    }
+    await until(async ()=>(await snapshot(c,groupRoute)).room.phase==='playing','旁观下一局')
+    await a.js("window.pantry.actBoardGame('"+groupRoom+"',{kind:'resign'})",groupRoute)
+    await until(()=>c.js('!!document.querySelector("dialog.result")?.open',groupRoute),'新局结果再次弹出')
+    await c.rpc({op:'capture',route:groupRoute,file:path.join(output,'spectator-result-dialog.png')})
+    await click(c,'.result .end-game',groupRoute)
+    await until(async ()=>!(await c.rpc({op:'windows'})).some(url=>url.includes('#/'+groupRoute)),'旁观退出')
+    // 使用本地 HTTP mock 经生产 SDK/Agent/P2P/聊天渲染完整验证，不连接真实模型。
+    const modelText = '**本地模型结论**\\n- 第一项：正常\\n- 第二项：支持换行\\n行内代码：`a\\nb`\\n<img src="http://127.0.0.1:1/forbidden" onerror="alert(1)">'
+    modelServer = require('node:http').createServer((req,res)=>{
+      assert.equal(req.socket.remoteAddress,'127.0.0.1')
+      assert.equal(req.url,'/v1/messages')
+      req.resume()
+      req.on('end',()=>{ modelRequests++; res.setHeader('content-type','application/json'); res.end(JSON.stringify({id:'msg_local',type:'message',role:'assistant',model:'local-test',content:[{type:'text',text:modelText}],stop_reason:'end_turn',stop_sequence:null,usage:{input_tokens:1,output_tokens:1}})) })
+    })
+    await new Promise(resolve=>modelServer.listen(0,'127.0.0.1',resolve))
+    const modelEndpoint = 'http://127.0.0.1:'+modelServer.address().port
     await click(a, 'button[aria-label="Agent 管理"]')
     await until(async () => (await a.rpc({op:'windows'})).some(url=>url.includes('#/agents')), 'AI 管理窗')
     await until(() => a.js('!!document.querySelector("#agent-name")', 'agents'), 'AI 表单')
     await a.rpc({op:'capture',route:'agents',file:path.join(output,'agents-empty-light.png')})
-    await a.js(`(() => { for (const [id,value] of [['agent-name','本机测试助手'],['agent-persona','你是一个耐心的研发助手，回答简洁、准确。'],['agent-endpoint','http://127.0.0.1:9'],['agent-model','local-test']]) { const el=document.getElementById(id); el.value=value; el.dispatchEvent(new Event('input',{bubbles:true})); } document.querySelector('.enabled input').click(); })()`, 'agents')
+    await a.js(`(() => { for (const [id,value] of [['agent-name','本机测试助手'],['agent-persona','你是一个耐心的研发助手，回答简洁、准确。'],['agent-endpoint',${JSON.stringify(modelEndpoint)}],['agent-model','local-test'],['agent-key','local-ui-test-key']]) { const el=document.getElementById(id); el.value=value; el.dispatchEvent(new Event('input',{bubbles:true})); } })()`, 'agents')
     await click(a, 'button[type=submit]', 'agents')
     await until(async () => (await a.js('window.pantry.listAgents()', 'agents')).length === 1, 'AI 保存配置')
     await until(() => a.js('document.querySelectorAll(".agent-item").length === 1 && document.querySelector("h2").textContent.includes("我的 Agent")', 'agents'), 'AI 列表更新')
     assert.equal(await a.js('document.getElementById("agent-key").value', 'agents'), '')
-    assert.equal((await a.js('window.pantry.listAgents()', 'agents'))[0].enabled, false)
+    assert.equal((await a.js('window.pantry.listAgents()', 'agents'))[0].enabled, true)
+    const agent = await until(async ()=>(await a.js('window.pantry.listAgents()','agents')).find(agent=>agent.status==='running'),'本地 Agent 运行')
+    await until(async ()=>(await b.js('window.pantry.getPeers()')).some(p=>p.nodeId===agent.id && p.online && p.caps.includes('agent1')),'发现本地 Agent')
+    await b.js('window.pantry.openConversation('+JSON.stringify(agent.id)+')')
+    await until(()=>b.js("Array.from(document.querySelectorAll('.conv')).some(el=>el.textContent.includes('本机测试助手'))"),'Agent 会话入口')
+    await b.js("Array.from(document.querySelectorAll('.conv')).find(el=>el.textContent.includes('本机测试助手')).click()")
+    await until(()=>b.js('!!document.querySelector("textarea.input")'),'Agent 聊天窗口')
+    await b.js("(()=>{const el=document.querySelector('textarea.input');el.value='检查 Markdown 展示';el.dispatchEvent(new Event('input',{bubbles:true}));})()")
+    await click(b,'.send')
+    await until(()=>b.js('!!document.querySelector(".row.peer .rich-message strong")'),'模型加粗渲染')
+    assert.equal(await b.js('document.querySelector(".row.peer .rich-message strong").textContent'),'本地模型结论')
+    assert.equal(await b.js('document.querySelectorAll(".row.peer .rich-message li").length'),2)
+    assert.equal(await b.js('document.querySelector(".row.peer .rich-message code").textContent'),'a\\nb')
+    assert.equal(await b.js('document.querySelectorAll(".row.peer .rich-message img,.row.peer .rich-message script").length'),0)
+    assert((await b.js("window.pantry.pageMessages('single:"+agent.id+"',null,100)")).some(m=>!m.isMine && m.text===modelText),'数据库保留原始模型内容')
+    assert.equal(modelRequests,1)
+    await b.rpc({op:'capture',file:path.join(output,'agent-markdown-chat.png')})
+    // 正常聊天也可发送 Markdown；长代码/宽表格只能在内部滚动，不能撑破消息区域。
+    await b.js("Array.from(document.querySelectorAll('.conv')).find(el=>el.textContent.includes('联机测试·甲')).click()")
+    await until(()=>b.js('!!document.querySelector("textarea.input")'),'普通聊天窗口')
+    const wideText = '*普通消息斜体*\n\n' + '```text\n' + 'long_code_'.repeat(120) + '\n```\n\n| ' + Array.from({length:12},(_,i)=>'列'+i).join(' | ') + ' |\n| '+Array(12).fill('---').join(' | ')+' |\n| '+Array(12).fill('单元格内容').join(' | ')+' |'
+    await b.js('(()=>{const el=document.querySelector("textarea.input");el.value='+JSON.stringify(wideText)+';el.dispatchEvent(new Event("input",{bubbles:true}));})()')
+    await click(b,'.send')
+    await until(()=>b.js('!!document.querySelector(".row.mine .rich-message pre")'),'普通消息代码/表格')
+    await b.rpc({op:'size',size:[850,800]})
+    await pause(200)
+    assert.equal(await b.js('(()=>{const root=document.querySelector(".row.mine .rich-message"),r=root.getBoundingClientRect();return !!root.querySelector("em") && r.left>=0 && r.right<=innerWidth && document.documentElement.scrollWidth<=innerWidth && [root.querySelector("pre"),root.querySelector(".table-scroll")].every(el=>el.scrollWidth>el.clientWidth && ["auto","scroll"].includes(getComputedStyle(el).overflowX))})()'),true,'长代码和宽表格在窄窗内部滚动')
+    await b.rpc({op:'capture',file:path.join(output,'markdown-wide-narrow.png')})
     await a.js("document.documentElement.dataset.theme='dark'", 'agents')
     await a.rpc({op:'size',route:'agents',size:[620,820]})
     await pause(200)
@@ -269,11 +361,12 @@ async function run() {
     await a.rpc({op:'capture',file:path.join(output,'chat-avatars.png')})
     const errors = await Promise.all(clients.map(c=>c.rpc({op:'errors'})))
     assert.deepEqual(errors, clients.map(() => []), '渲染进程不得有异常、Vue 警告或 CSP 拒绝')
-    fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({electron:'22.3.27',games,avatarBounds,errors},null,2))
+    fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({electron:'22.3.27',games,avatarBounds,modelRequests,errors},null,2))
     console.log('EXTENSION_UI_SELFTEST_OK',output)
 
   } finally {
     for (const c of clients) if (c.child.connected) { c.child.send({ id: -1, op: 'exit' }); c.child.disconnect() }
+    if (modelServer) await new Promise(resolve=>modelServer.close(resolve))
   }
 }
 if (process.versions.electron) void client().catch(error => { console.error(error); require('electron').app.exit(1) })

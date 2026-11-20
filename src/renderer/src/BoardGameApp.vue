@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { tr, language } from './utils/i18n'
 import { applyAppearance } from './utils/appearance'
 import { legalXiangqiMove, type BoardAction, type BoardView, type Side } from '../../shared/board-games'
@@ -9,6 +9,7 @@ const view = ref<BoardView | null>(null)
 const selected = ref(-1)
 const error = ref('')
 const pending = ref(false)
+const resultDialog = ref<HTMLDialogElement | null>(null)
 const subscriptions: Array<() => void> = []
 const room = computed(() => view.value?.room)
 const mySide = computed(() => room.value?.seats.indexOf(view.value?.selfId ?? '') ?? -1)
@@ -59,6 +60,16 @@ async function spectate(): Promise<void> {
   if (room.value?.phase === 'playing' && mySide.value >= 0 && !confirm(tr('离座将视为认输，确定继续？'))) return
   await act({ kind: 'spectate' })
 }
+/** 使用原生模态框提供焦点约束；同一局结束只弹一次，选择返回后不反复打断。 */
+watch(() => room.value?.phase, phase => {
+  if (phase === 'finished' && resultDialog.value && !resultDialog.value.open) resultDialog.value.showModal()
+}, { flush: 'post' })
+/** 结束只退出本人的棋盘，主进程照常处理离场，不替其他成员关闭房间。 */
+async function endGame(): Promise<void> {
+  if (pending.value) return
+  try { await window.pantry.closeWindow() }
+  catch { error.value = tr('操作失败，请检查连接或重新进入房间') }
+}
 /** 初始化先订阅再取快照，避免独立入口懒加载期间丢失同步事件。 */
 onMounted(async () => {
   subscriptions.push(window.pantry.onBoardGame(accept), window.pantry.onSettingsUpdated(applyAppearance))
@@ -96,6 +107,20 @@ onUnmounted(() => { for (const stop of subscriptions) stop() })
       <p class="hint">{{ tr('房主退出应用或断线后房间结束；房间最长保留两小时。') }}</p>
       <p v-if="view.error" role="alert">{{ tr('房间操作被拒绝：{0}', { 0: tr(({ stale: '状态已更新，请重试', forbidden: '无权执行此操作', full: '座位已满', illegal: '非法走子', unavailable: '房主暂不可达' } as Record<string, string>)[view.error] || '操作失败') }) }}</p>
     </template>
+    <dialog v-if="room?.phase === 'finished' && view" ref="resultDialog" class="result" aria-labelledby="game-result-title" aria-describedby="game-result-help" @cancel.prevent>
+      <span class="result-mark" aria-hidden="true">{{ room.state.winner === 'draw' ? '＝' : '★' }}</span>
+      <p class="result-caption">{{ tr('本局已结束') }}</p>
+      <h2 id="game-result-title">{{ status }}</h2>
+      <p id="game-result-help">{{ tr(mySide >= 0 ? '双方选择再来一局后，将重新开始对局。结束只退出你自己的棋盘。' : '你正在旁观。可以继续等待下一局，或结束旁观。') }}</p>
+      <p v-if="mySide >= 0 && !room.seats.every(Boolean)" role="status">{{ tr('有玩家已离座，可返回棋盘等待新玩家加入。') }}</p>
+      <div class="result-actions">
+        <button v-if="mySide >= 0" class="again" type="button" :disabled="pending || !room.seats.every(Boolean) || room.ready.includes(view.selfId)" @click="act({ kind: 'ready' })">{{ tr(room.ready.includes(view.selfId) ? '等待对方准备' : '再来一局') }}</button>
+        <button v-else type="button" class="again" @click="resultDialog?.close()">{{ tr('继续旁观') }}</button>
+        <button class="end-game" type="button" :disabled="pending" @click="endGame">{{ tr('结束') }}</button>
+      </div>
+      <button v-if="mySide >= 0" class="return-board" type="button" @click="resultDialog?.close()">{{ tr('返回棋盘') }}</button>
+      <p v-if="view.error || error" role="alert">{{ error || tr('操作失败，请检查连接或重新进入房间') }}</p>
+    </dialog>
     <p v-if="error" role="alert">{{ error }}</p>
   </main>
 </template>
@@ -115,5 +140,10 @@ button { padding:8px 12px; border:1px solid var(--line); border-radius:6px; font
 .piece { width:80%; height:80%; border-radius:50%; display:grid; place-items:center; box-sizing:border-box; border:2px solid var(--text-1); background:var(--bg-window); font-size:clamp(16px,4vw,30px); font-weight:700; user-select:none; }
 .gomoku .dark { background:#20242c; border-color:#050505; } .gomoku .light { background:#fafafa; border-color:#555; }
 .xiangqi .dark { color:var(--text-1); } .red { color:var(--danger); border-color:var(--danger); }
+.result { position:fixed; inset:0; margin:auto; max-height:calc(100vh - 48px); overflow:auto; width:min(360px,calc(100vw - 64px)); box-sizing:border-box; padding:28px; border:1px solid var(--line); border-radius:16px; background:var(--bg-window); color:var(--text-1); text-align:center; box-shadow:var(--shadow-float); }
+.result::backdrop { background:rgb(0 0 0 / 38%); } .result-mark { display:grid; place-items:center; margin:0 auto 16px; width:56px; height:56px; border-radius:50%; background:var(--primary-weak); color:var(--primary); font-size:30px; }
+.result h2 { margin:8px 0 16px; font-size:24px; } .result p { font-size:13px; line-height:1.7; color:var(--text-2); } .result-caption { margin:0; }
+.result-actions { display:flex; gap:12px; margin-top:24px; } .result-actions button { flex:1; } .again { background:var(--primary); color:var(--on-primary); border-color:var(--primary); }
+.return-board { margin-top:16px; border:0; background:transparent; color:var(--text-2); font-size:12px; }
 [role=alert] { color:var(--danger); }
 </style>

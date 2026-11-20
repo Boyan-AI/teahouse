@@ -200,8 +200,14 @@ In a direct or group conversation, choose **Gomoku** or **Chinese chess** from *
 
 - Join as a spectator, then choose a black/white or red/black seat. Once both seats are occupied, either seated player clicks **Start game**. Spectators cannot start it. Full rooms accept spectators only, who cannot move. Access is limited to the original direct-message peers or current group members.
 - Gomoku: 15×15, no forbidden moves, five or more in a row wins. Xiangqi validates horse legs, elephant eyes, river/palace boundaries, cannon screens, facing generals and self-check. Checkmate and stalemate both lose. Threefold repetition with the same side to move draws; tournament perpetual-check/chase adjudication is not implemented.
-- Leaving a seat or closing the board during play asks for confirmation and counts as resignation. Both seated players can ready up for another game. Spectators can close their window without affecting play.
+- Leaving a seat or closing the board during play asks for confirmation and counts as resignation. Wins, draws and resignations open a result dialog. Both players must choose **Play again** to restart; **End** closes only your own board. Spectators can wait for the next game or leave without affecting other members.
 - The host arbitrates seats and moves. The main process checks stale/replayed requests, seat races and spectator permissions. Rooms end when the host quits or is declared offline; host migration is not supported. Rooms expire after two hours, with at most 32 retained rooms per client.
 - Invitations stay in chat history but must pass live-room and membership checks when reopened; ended rooms cannot be restored. Existing dice and rock–paper–scissors PK remain unchanged.
 
-Developer validation: run `npm run build`, then `npm run test:extensions`. The script launches three isolated Electron clients and uses loopback networking only to verify games, spectators, avatars, and the Agent form. Screenshots and results are saved under `out/extension-ui-*`; no real model service is called.
+### Message Markdown rendering
+
+Message bodies support bold, italic, strikethrough, headings, lists, quotes, inline/fenced code, simple tables and HTTP(S) links without switching editing modes. Literal `\n` in Agent prose is displayed as a newline; code and Windows paths keep their literal contents. Ordinary messages do not receive this escape conversion. Stored, copied and forwarded messages retain the original text.
+
+This is a limited Markdown subset: HTML/scripts are never executed and remote message images are never loaded (Markdown images show their description only). Code and wide tables scroll inside the message. Links use the existing controlled opening path. Board invitations are dedicated cards showing the inviter, game and room; click **Join game / Spectate** to enter.
+
+Developer validation: run `npm run build`, then `npm run test:extensions`. The script launches three isolated Electron clients and uses loopback networking only to verify real wins, rematches, spectators, invitation cards, avatars, the Agent form, and Markdown through a local model mock and the production SDK/Agent/P2P path. Screenshots and results are saved under `out/extension-ui-*`; no real model service is called.

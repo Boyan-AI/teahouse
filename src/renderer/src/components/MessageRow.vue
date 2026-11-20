@@ -13,10 +13,14 @@ import FileCard from './FileCard.vue'
 import ImageBubble from './ImageBubble.vue'
 import PantryIcon from './PantryIcon.vue'
 import PkBubble from './PkBubble.vue'
-import BoardGameInvite from './BoardGameInvite.vue'
 import ScreenHistoryCard from './ScreenHistoryCard.vue'
 import { useChatStore } from '../stores/chat'
 import { usePeersStore } from '../stores/peers'
+import { AGENT_CAP } from '../../../shared/agents'
+import { hasMessageMarkdown, messageMarkdownText } from '../utils/message-markdown'
+
+import BoardGameInvite from './BoardGameInvite.vue'
+import RichMessage from './RichMessage.vue'
 
 const props = defineProps<{
   msg: MessageView
@@ -49,7 +53,7 @@ const showSeparator = computed(() => shouldShowSeparator(props.msg.ts, props.pre
 /** 普通消息显示头像；群消息及本人消息显示昵称，系统提示不伪装成聊天成员。 */
 const showSender = computed(() => props.msg.kind !== 'system' && props.msg.status !== 'recalled')
 const showSenderName = computed(() => showSender.value && (props.isGroupConv || props.msg.isMine))
-const parts = computed(() => textParts(props.msg.text))
+const parts = computed(() => textParts(displayText.value))
 const statusHint = computed(() => messageStatusHint(props.msg.kind, props.msg.status))
 
 function openMessageMenu(event: MouseEvent): void {
@@ -68,6 +72,8 @@ function revealSystemTarget(): void {
 
 const peersStore = usePeersStore()
 const chatStore = useChatStore()
+const displayText = computed(() => messageMarkdownText(props.msg.text, Boolean(peersStore.byId(props.msg.senderId)?.caps.includes(AGENT_CAP))))
+const richText = computed(() => hasMessageMarkdown(displayText.value))
 const historicalReply = ref<MessageView | null>()
 
 watch(
@@ -161,7 +167,7 @@ const replyMeta = computed((): ReplyMeta => {
         @forward="emit('forward', props.msg)"
         @recall="emit('recall', props.msg)"
       />
-      <BoardGameInvite v-else-if="props.msg.boardRef" :invite="props.msg.boardRef" class="bubble message-surface" />
+      <BoardGameInvite v-else-if="props.msg.boardRef" :invite="props.msg.boardRef" :inviter-name="props.senderName" class="message-surface" />
       <PkBubble
         v-else-if="props.msg.kind === 'pk'"
         :msg="props.msg"
@@ -178,7 +184,8 @@ const replyMeta = computed((): ReplyMeta => {
         class="bubble message-surface"
         @contextmenu.prevent.stop="openMessageMenu"
       >
-        <template v-for="(part, partIndex) in parts" :key="partIndex">
+        <RichMessage v-if="richText" :text="displayText" />
+        <template v-for="(part, partIndex) in richText ? [] : parts" :key="partIndex">
           <button
             v-if="part.url"
             class="text-link"

@@ -1,0 +1,27 @@
+/* 扩展消息专用样式；所有规则带组件前缀，首次显示卡片或富文本时加载。 */
+
+.board-invite { width:310px; max-width:100%; box-sizing:border-box; padding:16px; border:1px solid var(--primary-border); border-radius:12px; background:var(--bg-window); color:var(--text-1); box-shadow:var(--shadow-soft); user-select:text; }
+.board-invite .invite-top { display:flex; align-items:center; gap:10px; }
+.board-invite .board-symbol { display:grid; place-items:center; width:42px; height:42px; flex-shrink:0; border-radius:12px; background:var(--primary-weak); color:var(--primary); font-size:24px; font-weight:600; }
+.board-invite .invite-label { font-size:11px; color:var(--text-2); }
+.board-invite h3 { margin:4px 0 0; font-size:17px; }
+.board-invite .players { margin-left:auto; color:var(--primary); font-size:11px; white-space:nowrap; }
+.board-invite p { margin:14px 0 12px; font-size:13px; line-height:1.6; overflow-wrap:anywhere; }
+.board-invite .invite-meta { display:flex; flex-wrap:wrap; gap:6px 12px; font-size:11px; color:var(--text-2); }
+.board-invite small { font:inherit; }
+.board-invite .join-board { display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; margin-top:16px; padding:10px 12px; border:1px solid var(--primary); border-radius:7px; background:var(--primary); color:var(--on-primary); font:inherit; font-size:13px; cursor:pointer; }
+.board-invite .join-board:hover:not(:disabled) { background:var(--primary-hover); }
+.board-invite .join-board:disabled { opacity:.6; cursor:wait; }
+.board-invite .invite-error { margin-bottom:0; color:var(--danger); font-size:12px; }
+
+.rich-message { min-width:0; max-width:100%; white-space:normal; overflow-wrap:anywhere; }
+.rich-message p,.rich-message blockquote { margin:0 0 .65em; white-space:pre-wrap; }
+.rich-message ul,.rich-message ol { margin:.35em 0 .7em; padding-left:1.6em; } .rich-message li { padding-left:.15em; margin:.2em 0; white-space:pre-wrap; }
+.rich-message h3,.rich-message h4,.rich-message h5,.rich-message h6 { font-size:1.05em; line-height:1.5; margin:.7em 0 .4em; font-weight:650; }
+.rich-message code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.88em; background:var(--bg-list); border-radius:4px; padding:.12em .35em; white-space:pre-wrap; }
+.rich-message pre { max-width:100%; overflow:auto; margin:.6em 0; padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--bg-list); }
+.rich-message pre code { display:block; white-space:pre; background:transparent; padding:0; overflow-wrap:normal; } .rich-message pre small { display:block; font-size:11px; color:var(--text-2); margin-bottom:6px; }
+.rich-message blockquote { padding:2px 0 2px 12px; border-left:3px solid var(--primary); color:var(--text-2); }
+.rich-message .markdown-link { display:inline; border:0; background:transparent; padding:0; color:var(--primary); text-decoration:underline; font:inherit; cursor:pointer; text-align:left; overflow-wrap:anywhere; }
+.rich-message .table-scroll { max-width:100%; overflow-x:auto; margin:.6em 0; } .rich-message table { border-collapse:collapse; font-size:.9em; } .rich-message th,.rich-message td { padding:6px 9px; border:1px solid var(--line); text-align:left; min-width:48px; } .rich-message th { background:var(--bg-list); }
+.rich-message > :first-child { margin-top:0; } .rich-message > :last-child { margin-bottom:0; }

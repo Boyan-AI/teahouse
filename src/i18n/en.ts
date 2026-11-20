@@ -1,5 +1,18 @@
 /** 本地英文文案；中文源模板即回退词典。 */
 const english: Record<string, string> = {
+  "本局已结束": "Game over",
+  "双方选择再来一局后，将重新开始对局。结束只退出你自己的棋盘。": "A new game starts when both players choose Play again. End only closes your own board.",
+  "你正在旁观。可以继续等待下一局，或结束旁观。": "You are spectating. Stay for the next game or end spectating.",
+  "有玩家已离座，可返回棋盘等待新玩家加入。": "A player has left their seat. Return to the board to wait for another player.",
+  "再来一局": "Play again",
+  "继续旁观": "Keep watching",
+  "返回棋盘": "Return to board",
+  "棋局邀请": "Game invitation",
+  "双人对弈": "Two players",
+  "{0} 邀请你加入棋局": "{0} invites you to a game",
+  "可选座位 · 支持旁观": "Choose a seat · Spectators welcome",
+  "正在进入…": "Joining…",
+  "加入对局 / 旁观": "Join game / Spectate",
   "Anthropic 兼容接口": "Anthropic-compatible API",
   "双方已入座，点击开始对局": "Both players are seated. Click Start game.",
   "请选择座位，等待另一位玩家加入": "Choose a seat and wait for another player.",
@@ -1190,6 +1203,8 @@ const english: Record<string, string> = {
   "打开 {0} 的成员操作": "Open member actions for {0}",
   "成员操作": "Member actions",
   "@该成员": "Mention member",
-  "发起私聊": "Start direct chat"
+  "发起私聊": "Start direct chat",
+  "结束": "End",
+  "群成员": "Group member"
 }
 export default english

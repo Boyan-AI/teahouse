@@ -25,8 +25,9 @@ function harness(game: 'gomoku' | 'xiangqi' = 'gomoku') {
 }
 
 /** 真正编译并SSR渲染独立根，确保两个棋种棋格数量和旁观禁用实际落在模板中。 */
-async function renderBoard(game: 'gomoku' | 'xiangqi'): Promise<string> {
+async function renderBoard(game: 'gomoku' | 'xiangqi', finished = false): Promise<string> {
   const fixture = harness(game).view.value
+  if (finished) { fixture.room.phase = 'finished'; fixture.room.state.winner = 0 }
   vi.stubGlobal('location', { hash: '#/board?room=r' })
   const script = compileScript(parse(source).descriptor, { id: 'board-test', inlineTemplate: true })
   const code = ts.transpileModule(script.content, { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS } }).outputText
@@ -44,6 +45,23 @@ async function renderBoard(game: 'gomoku' | 'xiangqi'): Promise<string> {
 }
 
 describe('棋盘生产交互', () => {
+  it('结束展示原生结果对话框，旁观者可继续或结束，不代替玩家准备', async () => {
+    const html = await renderBoard('gomoku', true)
+    expect(html).toContain('<dialog')
+    expect(html).toContain('game-result-title')
+    expect(html).toContain('继续旁观')
+    expect(html).toContain('end-game')
+  })
+  it('结束通过现有窗口 IPC 退出，忙碌时不重复触发', async () => {
+    const ast = ts.createSourceFile('board.ts', source.split('<script setup lang="ts">')[1].split('</script>')[0], ts.ScriptTarget.Latest, true)
+    const actual = ast.statements.find(s => ts.isFunctionDeclaration(s) && s.name?.text === 'endGame')!.getText(ast)
+    const pending = ref(true), error = ref(''), close = vi.fn(async () => undefined)
+    vi.stubGlobal('window', { pantry: { closeWindow: close } })
+    const code = ts.transpileModule(actual + '\nreturn endGame;', { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText
+    const end = new Function('pending', 'error', 'tr', code)(pending, error, (s: string) => s)
+    await end(); expect(close).not.toHaveBeenCalled()
+    pending.value = false; await end(); expect(close).toHaveBeenCalledOnce()
+  })
   it('旁观者/非当前回合不提交动作，当前玩家只发送一次走子', async () => {
     const h = harness(); h.play(0); expect(h.send).not.toHaveBeenCalled()
     h.view.value.selfId = 'peer'; h.play(0); expect(h.send).not.toHaveBeenCalled()
