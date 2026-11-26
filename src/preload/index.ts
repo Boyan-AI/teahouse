@@ -100,6 +100,13 @@ const api: PantryApi = {
   reportImageDecodeFailure: (transferId) => ipcRenderer.invoke(IpcChannels.transferImageFailed, transferId),
   getPeers: (): Promise<PeerView[]> => ipcRenderer.invoke(IpcChannels.peersList),
   checkUpdate: (): Promise<UpdateAvailability | null> => ipcRenderer.invoke(IpcChannels.updateCheck),
+  getCabinetUpdate: () => ipcRenderer.invoke(IpcChannels.cabinetUpdateState),
+  configureCabinetUpdate: config => ipcRenderer.invoke(IpcChannels.cabinetUpdateConfigure, config),
+  checkCabinetUpdate: () => ipcRenderer.invoke(IpcChannels.cabinetUpdateCheck),
+  downloadCabinetUpdate: () => ipcRenderer.invoke(IpcChannels.cabinetUpdateDownload),
+  installCabinetUpdate: () => ipcRenderer.invoke(IpcChannels.cabinetUpdateInstall),
+  cancelCabinetUpdate: () => ipcRenderer.invoke(IpcChannels.cabinetUpdateCancel),
+  onCabinetUpdate: listener => subscribe(IpcEvents.cabinetUpdateChanged, listener),
   requestUpdate: (): Promise<boolean> => ipcRenderer.invoke(IpcChannels.updateRequest),
   probePeer: (nodeId: string): Promise<boolean> =>
     ipcRenderer.invoke(IpcChannels.peersProbe, nodeId),

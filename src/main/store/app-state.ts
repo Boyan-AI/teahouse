@@ -1,4 +1,5 @@
 import { initialLanguage, isLanguage } from '../../i18n'
+import { normalizeCabinetUpdateConfig, type CabinetUpdateConfig } from '../../shared/cabinet-update'
 import type { Language } from '../../shared/i18n'
 import { previewCidrImport, type ScanRangeImportOutcome } from '../../shared/cidr'
 import { readFileSync } from 'node:fs'
@@ -68,6 +69,8 @@ export interface ConfigFile {
   allowDirectFileSend: boolean
   /** 共享文件柜（决议 #271/#277）：共享根 + 默认权限档；按人例外在 SQLite share_grants */
   fileCabinet: FileCabinetConfig
+  /** 固定文件柜更新源；旧配置默认空来源，不主动联系任何节点。 */
+  cabinetUpdate: CabinetUpdateConfig
   /** 提示音：none 默认静音，其余交给系统通知播放 */
   sound: 'none' | 'drop' | 'wood' | 'ding'
   /** 发送键行为 */
@@ -240,6 +243,7 @@ export function saveAppSettings(
       | 'showMessagePreview'
       | 'allowDirectFileSend'
       | 'fileCabinet'
+      | 'cabinetUpdate'
       | 'sound'
       | 'sendKey'
       | 'captureShortcut'
@@ -247,6 +251,7 @@ export function saveAppSettings(
     >
   >
 ): void {
+  if (patch.cabinetUpdate !== undefined) state.config.cabinetUpdate = normalizeCabinetUpdateConfig(patch.cabinetUpdate)
   if (!state.config.scanRangeSources) state.config.scanRangeSources = {}
   if (!state.config.ignoredScanRanges) state.config.ignoredScanRanges = {}
   if (patch.notifications !== undefined) state.config.notifications = patch.notifications
@@ -392,6 +397,7 @@ export function loadAppState(
       showMessagePreview: true,
       allowDirectFileSend: true,
       fileCabinet: { root: '', mode: 'off' },
+      cabinetUpdate: normalizeCabinetUpdateConfig(undefined),
       sound: 'none',
       sendKey: 'enter',
       captureShortcut: 'CommandOrControl+Alt+A',
@@ -400,6 +406,7 @@ export function loadAppState(
     atomicWriteJson(configPath, config)
   }
   // 老配置文件升级：补默认字段
+  config.cabinetUpdate = normalizeCabinetUpdateConfig(config.cabinetUpdate)
   config.avatar = isAvatarPresetValue(config.avatar) ? config.avatar : -1
   config.avatarHash = isAvatarHash(config.avatarHash) ? config.avatarHash : ''
   config.setupDone = config.setupDone === true

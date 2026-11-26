@@ -36,6 +36,8 @@ export interface AgentRuntimeDeps {
 
 /** 每个 Agent 是独立的 P2P 节点，复用真实发现、TCP、群协议和持久去重。 */
 export class AgentRuntime {
+  /** 安装前检查正在执行或排队的模型工作，读取状态不会中断请求。 */
+  hasActiveRequests(): boolean { return this.working || this.jobs.length > 0 }
   private readonly udp: UdpChannel
   private readonly registry: PeerRegistry
   private files: FilesService | null = null

@@ -2158,6 +2158,46 @@ describe('FilesService 普通文件 24 小时领取期限（决议 #263）', () 
 })
 
 describe('FilesService 共享文件柜下载（决议 #275）', () => {
+  it('限额更新请求拒绝多文件/错误大小/错名，取消后迟到 offer 不可复活', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pantry-bounded-share-'))
+    tmpDirs.push(dir)
+    const messenger = new FakeMessenger(), transferRepo = new FakeTransferRepo()
+    const svc = createFilesService(dir, { messenger: messenger as unknown as Messenger,
+      transferRepo: transferRepo as unknown as TransferRepo })
+    for (const field of ['size', 'name', 'many', 'cancel']) {
+      const controller = new AbortController()
+      const promise = svc.fetchShareFile({ peerId: 'node-bob', reqId: field, name: '资料.txt', maxBytes: 5, size: 5,
+        saveDir: dir, signal: controller.signal, onProgress: () => undefined }, async () => true)
+      const rejected = expect(promise).rejects.toThrow(field === 'cancel' ? 'canceled' : 'invalid-file')
+      const offer = shareGetOffer('node-bob', 'bounded-' + field)
+      if (field === 'size') { offer.payload.totalSize = 6; offer.payload.files[0].size = 6 }
+      if (field === 'name') { offer.payload.rootName = 'other.txt'; offer.payload.files[0].path = 'other.txt' }
+      if (field === 'many') { offer.payload.files.push({ fileId: 'f2', path: 'extra.txt', size: 1 }); offer.payload.fileCount = 2; offer.payload.totalSize = 6 }
+      if (field === 'cancel') controller.abort()
+      messenger.emit('incoming', offer)
+      await rejected
+      expect(svc.isFetchingShareFrom('node-bob')).toBe(false)
+    }
+    expect(transferRepo.rows.size).toBe(0)
+    await svc.stop()
+  })
+
+  it('拒绝报文须同时匹配固定节点和请求 ID', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pantry-bounded-deny-'))
+    tmpDirs.push(dir)
+    const svc = createFilesService(dir, {})
+    const controller = new AbortController()
+    const promise = svc.fetchShareFile({ peerId: 'node-bob', reqId: 'current', name: '资料.txt', maxBytes: 5,
+      saveDir: dir, signal: controller.signal, onProgress: () => undefined }, async () => true)
+    const rejected = expect(promise).rejects.toThrow('off')
+    svc.rejectShareFile('node-other', 'current', 'off')
+    svc.rejectShareFile('node-bob', 'old', 'off')
+    expect(svc.isFetchingShareFrom('node-bob')).toBe(true)
+    svc.rejectShareFile('node-bob', 'current', 'off')
+    await rejected
+    await svc.stop()
+  })
+
   it('发出的 share-get offer 不进聊天流、不带聊天锚点与领取期限', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'pantry-share-out-'))
     tmpDirs.push(dir)

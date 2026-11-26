@@ -219,6 +219,32 @@ npm run smoke     # 构建 + 启动 1.5s 干净退出（退出码 0）
 
 原生 Agent 回环验收入口为 `npm run test:agents`：在 Electron 内置 Node16 中验证 SDK、本地模型 mock、真实 SQLite、两个用户与 Agent 的发现、TCP 长文本、明确群提及和 exit 离线；只使用临时目录及回环端口。缺少 Electron 二进制时不能运行，必须保留为未通过验收项。
 
+## 文件柜更新的发布与验证
+
+更新复用现有 `share-get` 传输，接收端固定节点、相对目录、单文件名和大小限额。清单上限 64 KiB，安装包上限 512 MiB，稳定版本采用严格三段数字。`schema` 为 1，`platform` 为 `mac`，`arch` 为 `arm64`，同时包含 `version`、`file`、`size`、`sha256`、最多 4000 字符的 `notes` 和 `dataCompatible: true`，额外字段会被拒绝。
+
+完成本地构建与签名后生成清单。`--compatible-data` 表示发布者已确认该版本没有不兼容的数据迁移。
+
+```sh
+npm run update:manifest -- /path/to/Teahouse-0.66.0-mac-arm64.dmg --compatible-data --notes /path/to/notes.txt
+```
+
+生成器流式计算哈希并检查包在读取期间是否改变，最后在包目录原子写入 `teahouse-update.json`。真实共享目录发布时，先把完整版本包放入发布目录，最后替换清单。固定版本文件名发布后保持内容稳定。发布目录仅发布者可写，接收者仅需文件柜读取权限。当前协议的节点身份和临时签名不提供发布者密码学认证，只有 SHA256 完整性校验。
+
+安装助手由应用自身 `extraResources` 携带。主进程只读挂载 DMG，复核 `com.pantry.app`、版本、arm64、完整签名和链接边界，再将新包复制到当前应用父目录的 `.teahouse-update-<随机ID>/next.app`。助手确认就绪后旧应用才退出，助手依次备份与替换，启动新进程并等待界面挂载握手。失败最多恢复旧包一次。成功事务的 `previous.app` 保留七天，后续启动只按本功能事务标记清理，失败事务保留。恢复范围是应用 bundle，发布者需保证数据向后兼容。
+
+缓存位于应用数据目录 `data/updates/cabinet`。切换来源、取消、休眠和退出撤销下载授权。旧文件柜 offer 没有请求 ID，故更新请求与同一发布者的普通下载授权互斥，普通传输协议继续兼容旧客户端。
+
+```sh
+npm run build
+PANTRY_CABINET_TEST=1 node scripts/extension-ui-selftest.cjs
+npm run test:macos-update
+```
+
+桌面验收使用隔离双 Electron 和 127.0.0.1，覆盖目录浏览、旧版发布者提供新包、提示去重、确认下载、进度、完整性、权限、清单损坏与中英文主题。原生助手验收在 `out/` 创建真实 ad-hoc Mach-O 夹具，覆盖替换成功、父进程存活、无权限、签名失败和启动回滚。若本机 clang 与默认 SDK 不匹配，可在单条测试命令前设置兼容的 `SDKROOT`。
+
+完整 Electron 包验收为原生命令增加 `PANTRY_UPDATE_DMG=<本项目内签名DMG>` 与 `PANTRY_UPDATE_BASE_APP=<本项目内旧版app副本>`，会调用生产准备及助手启动函数、验证资源白名单和新应用界面握手。将这两个变量加到 `PANTRY_CABINET_TEST=1` 桌面验收命令，还会先通过真实文件柜下载该 DMG，再直接安装生产下载器校验后的缓存。测试清单版本固定为 0.66.0，夹具包版本应与之匹配。所有目标均为新建 `out/` 副本，用户数据与监听地址保持隔离。完成 DMG 读挂载后及时卸载，避免工具沿镜像自带的 Applications 快捷链接扫描系统目录。
+
 ## macOS 内网测试包签名
 
 无开发者证书的内网包也必须完整封装资源签名：仅设置 mac.identity=null 会残留 Electron 的 linker 临时签名，可能在接收端显示“已损坏”。内网测试可显式使用专用 afterPack 钩子；保留默认正式签名流程，不修改系统保护。

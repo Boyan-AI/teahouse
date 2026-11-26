@@ -15,6 +15,8 @@
     "node-fetch": "2.7.0"
   },
   "scripts": {
+    "update:manifest": "node scripts/create-update-manifest.mjs",
+    "test:macos-update": "node scripts/macos-update-selftest.cjs",
     "postinstall": "node scripts/rebuild-electron.cjs",
     "rebuild:electron": "node scripts/rebuild-electron.cjs --force",
     "dev": "node scripts/prepare-ocr-assets.mjs && electron-vite dev",
@@ -143,6 +145,10 @@
         "CFBundleName": "Teahouse"
       },
       "extraResources": [
+        {
+          "from": "scripts/macos-update-helper.sh",
+          "to": "macos-update-helper.sh"
+        },
         {
           "from": "build/mac/zh_CN.lproj",
           "to": "zh_CN.lproj"

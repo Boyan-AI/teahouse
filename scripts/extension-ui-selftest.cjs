@@ -51,6 +51,17 @@ async function client() {
   // 仅为显式排队的隔离夹具代答原生选图；其余操作仍使用真实系统选择器。
   const { dialog } = require('electron'), showOpenDialog = dialog.showOpenDialog.bind(dialog)
   let nextPickedFiles = null
+  const updatePrompts = []
+  let updateResponse = 0
+  const showMessageBox = dialog.showMessageBox.bind(dialog)
+  dialog.showMessageBox = (...args) => {
+    const options = args.at(-1)
+    if (process.env.PANTRY_CABINET_TEST && /文件柜更新|Cabinet update|安装更新|Install the update/.test(options.message || '')) {
+      updatePrompts.push(options)
+      return Promise.resolve({ response: updateResponse, checkboxChecked: false })
+    }
+    return showMessageBox(...args)
+  }
   dialog.showOpenDialog = (...args) => {
     if (!nextPickedFiles) return showOpenDialog(...args)
     const filePaths = nextPickedFiles; nextPickedFiles = null
@@ -76,6 +87,8 @@ async function client() {
       let value
       if (r.op === 'exit') { app.exit(0); return }
       if (r.op === 'errors') value = errors
+      else if (r.op === 'update-prompts') value = updatePrompts
+      else if (r.op === 'update-response') { updateResponse = r.response; value = true }
       else if (r.op === 'picker') {
         assert(r.files.every(file=>fs.realpathSync(file).startsWith(path.dirname(c.data)+path.sep)),'选图夹具必须在本次隔离目录内')
         nextPickedFiles = r.files; value = true
@@ -149,6 +162,10 @@ async function run() {
       await self.js(`window.pantry.openConversation(${JSON.stringify(peer.nodeId)})`)
     }
     console.log('CLIENTS_READY', output)
+    if (process.env.PANTRY_CABINET_TEST) {
+      await cabinetUpdateTest(a, b, output)
+      return
+    }
     for (const [self, name] of [[a, '联机测试·乙'], [b, '联机测试·甲']]) {
       await until(()=>self.js(`Array.from(document.querySelectorAll('.conv')).some(el=>el.textContent.includes(${JSON.stringify(name)}))`),'会话列表渲染')
       await self.js(`Array.from(document.querySelectorAll('.conv')).find(el => el.textContent.includes(${JSON.stringify(name)})).click()`)
@@ -531,5 +548,87 @@ async function run() {
     if (modelServer) await new Promise(resolve=>modelServer.close(resolve))
   }
 }
+
+/** 真实双客户端走文件柜与生产 IPC，发布者运行 0.65.0 仍可发布更高版本清单。 */
+async function cabinetUpdateTest(publisher, receiver, output) {
+  const cabinet = path.join(output, 'publisher-cabinet'), updates = path.join(cabinet, 'mac')
+  fs.mkdirSync(updates, { recursive: true })
+  const packageName = 'Teahouse-0.66.0-mac-arm64.dmg'
+  // 可选使用本项目生成的真实签名 DMG，将文件柜下载结果直接交给隔离安装验收。
+  const actualDmg = process.env.PANTRY_UPDATE_DMG ? fs.realpathSync(process.env.PANTRY_UPDATE_DMG) : null
+  if (actualDmg) assert(actualDmg.startsWith(repo + path.sep), '更新包夹具必须来自本项目')
+  const bytes = actualDmg ? fs.readFileSync(actualDmg) : Buffer.alloc(4 * 1024 * 1024, 65)
+  fs.writeFileSync(path.join(updates, packageName), bytes)
+  const manifest = { schema: 1, version: '0.66.0', platform: 'mac', arch: 'arm64', file: packageName,
+    size: bytes.length, sha256: require('node:crypto').createHash('sha256').update(bytes).digest('hex'),
+    notes: '隔离测试更新说明\nFile cabinet update verification', dataCompatible: true }
+  fs.writeFileSync(path.join(updates, 'teahouse-update.json'), JSON.stringify(manifest))
+  await publisher.rpc({ op: 'picker', files: [cabinet] })
+  assert((await publisher.js('window.pantry.setShareRoot()')).ok)
+  await publisher.js("window.pantry.setShareMode('read')")
+  await receiver.js('window.pantry.openSettings()')
+  await until(() => receiver.js('!!document.querySelector(".settings")', 'settings').catch(() => false), '设置窗口')
+  await receiver.js("Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='关于').click()", 'settings')
+  await until(() => receiver.js('!!document.querySelector(".cabinet-update-settings")', 'settings'), '文件柜更新设置')
+  const config = { nodeId: publisher.nodeId, directory: 'mac', autoCheck: false }
+  await receiver.js('window.pantry.configureCabinetUpdate(' + JSON.stringify(config) + ')', 'settings')
+  await receiver.js('window.__cabinetStates=[];void window.pantry.onCabinetUpdate(state=>window.__cabinetStates.push({status:state.status,bytes:state.bytes}))')
+  // 重新打开组件让保存的来源反映到编辑草稿，浏览按钮必须能进入真实柜内目录。
+  await receiver.rpc({ op: 'close', route: 'settings' })
+  await until(async () => !(await receiver.rpc({ op: 'windows' })).some(url => url.includes('#/settings')), '设置窗口关闭完成')
+  await receiver.js('window.pantry.openSettings()')
+  await until(() => receiver.js('!!document.querySelector(".settings")', 'settings').catch(() => false), '重开设置')
+  await receiver.js("Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='关于').click()", 'settings')
+  await until(() => receiver.js('!!document.querySelector(".cabinet-update-settings")', 'settings'), '更新来源回显')
+  await receiver.js("Array.from(document.querySelectorAll('.cabinet-update-settings button')).find(b=>b.textContent.trim()==='浏览').click()", 'settings')
+  await until(() => receiver.js('document.querySelector(".folder-toolbar")?.textContent.includes("mac")', 'settings'), '真实目录浏览')
+  await receiver.js("Array.from(document.querySelectorAll('.cabinet-update-settings button')).find(b=>b.textContent.trim()==='使用此目录').click()", 'settings')
+  await receiver.js("Array.from(document.querySelectorAll('.cabinet-update-settings button')).find(b=>b.textContent.trim()==='保存更新源').click()", 'settings')
+  await receiver.js("Array.from(document.querySelectorAll('.cabinet-update-settings button')).find(b=>b.textContent.trim()==='立即检查').click()", 'settings')
+  await until(async () => (await receiver.js('window.pantry.getCabinetUpdate()')).status === 'available', '回环清单检查')
+  await until(async () => (await receiver.rpc({ op: 'update-prompts' })).length === 1, '首次确认提示')
+  assert.equal((await receiver.js('window.pantry.getCabinetUpdate()')).manifest.version, '0.66.0')
+  assert.equal((await receiver.js('window.pantry.listTransfers()')).some(item => item.name === 'teahouse-update.json'), false, '清单传输隐藏')
+  await receiver.js('window.pantry.checkCabinetUpdate()')
+  assert.equal((await receiver.rpc({ op: 'update-prompts' })).length, 1, '同版本不重复弹窗')
+  await receiver.js('document.querySelector(".cabinet-update-settings").scrollIntoView({block:"start"})', 'settings')
+  await receiver.rpc({ op: 'capture', route: 'settings', file: path.join(output, 'cabinet-update-zh-light.png') })
+  await receiver.rpc({ op: 'update-response', response: 1 })
+  await receiver.js('window.pantry.downloadCabinetUpdate()')
+  const downloaded = await receiver.js('window.pantry.getCabinetUpdate()')
+  assert.equal(downloaded.packageReady, true, '实际文件柜下载与 SHA256 校验通过')
+  assert.equal(downloaded.error, 'manual-install', '开发实例禁止覆盖安装')
+  const states = await receiver.js('window.__cabinetStates')
+  assert(states.some(state => state.status === 'downloading' && state.bytes > 0), '真实传输进度可见')
+  assert(states.some(state => state.status === 'verifying'), '下载后进入校验状态')
+  if (actualDmg) {
+    const cache = path.join(output, 'client-1/data/updates/cabinet')
+    const packages = fs.readdirSync(cache).map(name => path.join(cache, name, packageName)).filter(file => fs.existsSync(file))
+    assert.equal(packages.length, 1, '只安装生产下载器实际收到并校验的缓存')
+    await require('./macos-update-selftest.cjs').verifyPackagedUpdate(output, { dmg: packages[0] })
+  }
+  await receiver.js('window.pantry.cancelCabinetUpdate()')
+  await publisher.js("window.pantry.setShareMode('off')")
+  assert.equal((await receiver.js('window.pantry.checkCabinetUpdate()')).error, 'off')
+  await publisher.js("window.pantry.setShareMode('read')")
+  fs.writeFileSync(path.join(updates, 'teahouse-update.json'), '{')
+  assert.equal((await receiver.js('window.pantry.checkCabinetUpdate()')).error, 'invalid-manifest')
+  fs.writeFileSync(path.join(updates, 'teahouse-update.json'), JSON.stringify(manifest))
+  await receiver.js('window.pantry.configureCabinetUpdate(' + JSON.stringify({ ...config, directory: 'missing' }) + ')')
+  assert.equal((await receiver.js('window.pantry.checkCabinetUpdate()')).error, 'directory-missing')
+  await receiver.js('window.pantry.configureCabinetUpdate(' + JSON.stringify(config) + ')')
+  await receiver.js("window.pantry.saveAppSettings({language:'en',theme:'dark'})")
+  await receiver.rpc({ op: 'size', route: 'settings', size: [720, 780] })
+  await until(() => receiver.js('document.querySelector("#cabinet-update-heading")?.textContent === "File cabinet updates"', 'settings'), '英文更新界面')
+  assert.equal(await receiver.js('document.documentElement.scrollWidth <= innerWidth', 'settings'), true, '英文窄窗无横向溢出')
+  await receiver.js('document.querySelector(".cabinet-update-settings").scrollIntoView({block:"start"})', 'settings')
+  await until(() => receiver.js('getComputedStyle(document.querySelector(".cabinet-update-settings .n-input")).backgroundColor === "rgb(32, 42, 56)"', 'settings'), '深色控件完成主题更新')
+  await receiver.rpc({ op: 'capture', route: 'settings', file: path.join(output, 'cabinet-update-en-dark.png') })
+  const errors = await Promise.all([publisher.rpc({ op: 'errors' }), receiver.rpc({ op: 'errors' })])
+  assert.deepEqual(errors, [[], []])
+  fs.writeFileSync(path.join(output, 'cabinet-result.json'), JSON.stringify({ prompts: await receiver.rpc({ op: 'update-prompts' }), downloaded, errors }, null, 2))
+  console.log('CABINET_UPDATE_UI_SELFTEST_OK', output)
+}
+
 if (process.versions.electron) void client().catch(error => { console.error(error); require('electron').app.exit(1) })
 else void run().catch(error => { console.error(error); process.exitCode = 1 })

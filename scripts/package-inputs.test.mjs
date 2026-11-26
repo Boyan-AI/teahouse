@@ -17,4 +17,8 @@ it('安装包仅收录生产构建，排除自测脚本、截图、数据库和�
   for (const path of ['out/agent-selftest.cjs', 'out/db-selftest.cjs', 'out/extension-ui-fixture/client-0/pantry.db', 'out/extension-ui-fixture/screenshot.png', '.agent/plans/active/local.md', '.env', 'release/old.dmg']) {
     expect(filter(resolve(root, path), file), path).toBe(false)
   }
+  expect(pkg.build.mac.extraResources).toContainEqual({ from: 'scripts/macos-update-helper.sh', to: 'macos-update-helper.sh' })
+  for (const path of ['scripts/create-update-manifest.mjs', 'scripts/macos-update-selftest.cjs', 'out/macos-update-package/Teahouse.app/Contents/Info.plist']) {
+    expect(filter(resolve(root, path), file), path).toBe(false)
+  }
 })

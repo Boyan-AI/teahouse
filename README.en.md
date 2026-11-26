@@ -156,6 +156,16 @@ Please report bugs and feature requests through [GitHub Issues](https://github.c
 
 Standard renderer controls use [Naive UI](https://github.com/tusen-ai/naive-ui) 2.43.2 (locally bundled, MIT). Built-in avatar and emoji compatibility rendering uses a locally bundled subset of [Twemoji](https://github.com/jdecked/twemoji) (CC-BY 4.0). Built-in offline OCR uses PaddleOCR models and onnxruntime-web. See [Third-party notices](THIRD_PARTY_NOTICES.en.md).
 
+## macOS file cabinet updates
+
+Open **Settings → About → File cabinet updates**, choose a trusted publisher and a folder inside their cabinet, and save the source. Check manually or enable checks after startup and every 30 minutes. The publisher must be online and grant read access. Their running app version does not determine the version offered by the update folder.
+
+An available update shows its version, publisher, notes, and size. **Later** keeps it available and suppresses repeated automatic prompts for that source and version during the current session. **Download and update** downloads the DMG, verifies its actual size and SHA256, then installs and restarts. Active transfers, games, or AI requests trigger another confirmation before quitting. Offline, permission, missing folder, invalid manifest, and no newer version are distinct outcomes.
+
+This feature supports macOS arm64 installations in writable folders. Apps running from a disk image, App Translocation, or an unwritable location need a manual installation into a writable app folder first. The installer keeps the previous app and attempts one rollback and restart if the new app fails to start. Successful backups remain for seven days and are removed on a later startup. Failed transactions remain available for inspection. Chat data and settings stay in their original location. App rollback does not restore the database, so only updates explicitly declared data compatible by the publisher are accepted.
+
+The publishing folder contains a complete `Teahouse-<version>-mac-arm64.dmg` and `teahouse-update.json`. Place the complete package first and publish the manifest last with an atomic replacement. Restrict write access to the trusted publisher and grant clients read access. SHA256 and ad-hoc code signatures verify integrity. Publisher trust depends on the selected node and directory permissions. macOS Gatekeeper restrictions still apply. Publishing commands and verification are documented in the development guide. [DEVELOPMENT.en.md](DEVELOPMENT.en.md#publishing-and-verifying-cabinet-updates)
+
 ## License
 
 Copyright © 2026 skyjt.

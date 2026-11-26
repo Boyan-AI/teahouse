@@ -1,4 +1,7 @@
 import type { StickerView } from '../shared/ipc'
+import { CabinetUpdater, verifyCabinetPackage } from './services/cabinet-updater'
+import { acknowledgeMacInstall, discardMacPreparation, inspectMacInstallHistory, launchMacInstall, prepareMacInstall, type MacInstallTransaction } from './services/macos-updater'
+import { normalizeCabinetUpdateConfig, type CabinetUpdateState } from '../shared/cabinet-update'
 import { parseImageMessageMeta } from '../shared/image-message'
 import { BoardGamesService } from './services/board-games'
 import { isBoardInvite, isBoardAction, boardId, type BoardView } from '../shared/board-games'
@@ -292,7 +295,7 @@ if (!gotLock) {
   const updateRequestGate = new UpdateRequestGate()
   const shareDownloadGate = new ShareDownloadGate()
   /** 本机发出的 list / get 在等应答（决议 #275）：reqId → 决议函数，超时由发起方自行清理 */
-  const sharePending = new Map<string, (payload: SharePayload | null) => void>()
+  const sharePending = new Map<string, { peerId: string; settle: (payload: SharePayload | null) => void }>()
   /** peerId → 正在等待的 get reqId，便于 offer 到货时提前收口 */
   const shareGetReq = new Map<string, string>()
   let discovery: Discovery | null = null
@@ -306,6 +309,9 @@ if (!gotLock) {
   let files: FilesService | null = null
   let boards: BoardGamesService | null = null
   let agents: AgentManager | null = null
+  let cabinetUpdater: CabinetUpdater | null = null
+  let cabinetConfirmation = false
+  let cabinetInstalling = false
   let agentInitError = ''
   const extensionWindows = new ExtensionWindows({ settings: settingsView,
     mayClose: (key, win) => {
@@ -983,11 +989,12 @@ if (!gotLock) {
    */
   function handleShareCtl(env: Envelope<SharePayload>): void {
     const payload = env.payload
+    if (payload.op === 'deny') files?.rejectShareFile(env.from, payload.reqId, payload.reason)
     if (payload.op === 'list-ok' || payload.op === 'deny') {
-      const settle = sharePending.get(payload.reqId)
-      if (settle) {
+      const pending = sharePending.get(payload.reqId)
+      if (pending?.peerId === env.from) {
         sharePending.delete(payload.reqId)
-        settle(payload)
+        pending.settle(payload)
       }
       return
     }
@@ -1021,10 +1028,10 @@ if (!gotLock) {
     const reqId = shareGetReq.get(peerId)
     if (!reqId) return
     shareGetReq.delete(peerId)
-    const settle = sharePending.get(reqId)
-    if (!settle) return
+    const pending = sharePending.get(reqId)
+    if (!pending) return
     sharePending.delete(reqId)
-    settle(null)
+    pending.settle(null)
   }
 
   /** 上传前先在本机量一遍：递归统计文件数与总字节，读不到返回 null。 */
@@ -1039,7 +1046,7 @@ if (!gotLock) {
   ): Promise<SharePayload | null> {
     if (!messenger) return null
     const waiter = new Promise<SharePayload | null>((resolve) => {
-      sharePending.set(payload.reqId, resolve)
+      sharePending.set(payload.reqId, { peerId, settle: resolve })
       setTimeout(() => {
         if (sharePending.delete(payload.reqId)) resolve(null)
       }, SHARE_REQ_TIMEOUT).unref?.()
@@ -1870,6 +1877,88 @@ if (!gotLock) {
 
   ipcMain.handle(IpcChannels.updateRequest, (): Promise<boolean> => requestUpdatePackage())
 
+  /** 安装前使用实时活动状态；确认后到真正退出前还会再次检查。 */
+  function cabinetUpdateHasActivity(): boolean {
+    return !!(files?.hasActiveTransfers() || boards?.hasActiveGames() || agents?.hasActiveRequests())
+  }
+
+  /** 只安装主进程已校验的缓存；准备完成后复核在途活动，再交接独立助手。 */
+  async function installCabinetUpdate(alreadyConfirmed = false): Promise<CabinetUpdateState | null> {
+    const update = cabinetUpdater
+    const installation = update?.installation()
+    if (!update || !installation || cabinetInstalling || update.snapshot().status === 'installing') return update?.snapshot() ?? null
+    cabinetInstalling = true
+    let transaction: MacInstallTransaction | null = null
+    let handedOff = false
+    try {
+      if (!alreadyConfirmed || cabinetUpdateHasActivity()) {
+        const result = await dialog.showMessageBox({ type: 'question', message: tr('安装更新并重启茶话间？'),
+          detail: cabinetUpdateHasActivity() ? tr('当前有文件传输、棋局或 AI 请求，重启会中断这些活动。可以稍后安装。') : tr('安装后将退出并重启茶话间，聊天记录与设置会保留。'),
+          buttons: [tr('稍后'), tr('安装并重启')], defaultId: 0, cancelId: 0 })
+        if (result.response !== 1 || update.installation()?.path !== installation.path) return update.snapshot()
+      }
+      update.installing()
+      if (!app.isPackaged) throw new Error('manual-install')
+      await verifyCabinetPackage(installation.path, installation.manifest)
+      transaction = await prepareMacInstall({ executable: process.execPath, dmg: installation.path,
+        cache: join(updatesDir(), 'cabinet'), version: installation.manifest.version, arch: process.arch,
+        helper: join(process.resourcesPath, 'macos-update-helper.sh') })
+      if (cabinetUpdateHasActivity()) {
+        const result = await dialog.showMessageBox({ type: 'question', message: tr('安装更新并重启茶话间？'),
+          detail: tr('当前有文件传输、棋局或 AI 请求，重启会中断这些活动。可以稍后安装。'),
+          buttons: [tr('稍后'), tr('安装并重启')], defaultId: 0, cancelId: 0 })
+        if (result.response !== 1) { update.deferInstall(); return update.snapshot() }
+      }
+      await launchMacInstall(transaction)
+      handedOff = true
+      isQuitting = true
+      app.quit()
+    } catch (error) { update.fail(error) }
+    finally {
+      cabinetInstalling = false
+      if (transaction && !handedOff) await discardMacPreparation(transaction).catch(() => undefined)
+    }
+    return update.snapshot()
+  }
+
+  /** 提示包含固定来源与精确包信息，后台检查从不直接开始下载。 */
+  async function confirmCabinetDownload(): Promise<CabinetUpdateState | null> {
+    const update = cabinetUpdater
+    const state = update?.snapshot()
+    if (!update || !state?.manifest || cabinetConfirmation || state.packageReady || !['available', 'error'].includes(state.status)) return state ?? null
+    cabinetConfirmation = true
+    try {
+      const result = await dialog.showMessageBox({ type: 'question', message: tr('发现文件柜更新 v{0}', { 0: state.manifest.version }),
+        detail: tr('当前版本 v{0}，来源 {1}，安装包 {2} MB。\n\n{3}\n\n确认后下载并校验，安装时将退出重启。', {
+          0: app.getVersion(), 1: state.sourceName || state.config.nodeId, 2: (state.manifest.size / 1024 / 1024).toFixed(1), 3: state.manifest.notes }),
+        buttons: [tr('稍后'), tr('下载并更新')], defaultId: 0, cancelId: 0 })
+      const current = update.snapshot()
+      if (result.response !== 1 || current.config.nodeId !== state.config.nodeId || current.config.directory !== state.config.directory ||
+        current.manifest?.sha256 !== state.manifest.sha256) return current
+      await update.download()
+      if (update.snapshot().status === 'ready') return await installCabinetUpdate(true)
+      return update.snapshot()
+    } finally { cabinetConfirmation = false }
+  }
+
+  ipcMain.handle(IpcChannels.cabinetUpdateState, () => cabinetUpdater?.snapshot() ?? null)
+  ipcMain.handle(IpcChannels.cabinetUpdateConfigure, (_event, input: unknown) => {
+    if (!appState || !cabinetUpdater || cabinetUpdater.snapshot().status === 'installing') return cabinetUpdater?.snapshot() ?? null
+    const clean = normalizeCabinetUpdateConfig(input)
+    if (!input || typeof input !== 'object' || JSON.stringify(clean) !== JSON.stringify({ nodeId: (input as typeof clean).nodeId,
+      directory: (input as typeof clean).directory, autoCheck: (input as typeof clean).autoCheck })) {
+      cabinetUpdater.fail(new Error('invalid-config'))
+      return cabinetUpdater.snapshot()
+    }
+    saveAppSettings(appState, { cabinetUpdate: clean })
+    cabinetUpdater.configure(clean)
+    return cabinetUpdater.snapshot()
+  })
+  ipcMain.handle(IpcChannels.cabinetUpdateCheck, () => cabinetUpdater?.check() ?? null)
+  ipcMain.handle(IpcChannels.cabinetUpdateDownload, () => confirmCabinetDownload())
+  ipcMain.handle(IpcChannels.cabinetUpdateInstall, () => installCabinetUpdate())
+  ipcMain.handle(IpcChannels.cabinetUpdateCancel, () => { cabinetUpdater?.cancel(); return cabinetUpdater?.snapshot() ?? null })
+
   ipcMain.handle(IpcChannels.peersProbe, (_event, nodeId: unknown): boolean => {
     if (typeof nodeId !== 'string' || nodeId.length === 0 || nodeId.length > 64) return false
     return discovery?.probeNode(nodeId) ?? false
@@ -2332,6 +2421,7 @@ if (!gotLock) {
         clean.push(raw)
       }
       const target = peerId as string
+      if (files?.isFetchingShareFrom(target)) return { ok: false, reason: 'busy' }
 
       let saveDir = join(
         appState?.config.fileDir || defaultFileDir(),
@@ -3198,8 +3288,8 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     remoteView.start()
-    powerMonitor.on('suspend', () => { void agents?.pause().catch(() => undefined) })
-    powerMonitor.on('resume', () => { void agents?.resume().catch(() => undefined) })
+    powerMonitor.on('suspend', () => { cabinetUpdater?.suspend(); void agents?.pause().catch(() => undefined) })
+    powerMonitor.on('resume', () => { cabinetUpdater?.resume(); void agents?.resume().catch(() => undefined) })
     void imagePreview.prune()
     const updateCaps = canAdvertiseUpdateSource() ? [CAPS.updateSource] : []
     appState = loadAppState(app.getPath('userData'), app.getVersion(), tcpPort, udpPort, [
@@ -3227,6 +3317,36 @@ if (!gotLock) {
       getDefaultMode: () => appState?.config.fileCabinet.mode ?? 'off',
       getGrants: () => shareGrantsRepo
     })
+    if (process.platform === 'darwin' && process.arch === 'arm64') {
+      cabinetUpdater = new CabinetUpdater({ version: app.getVersion(), platform: process.platform, arch: process.arch,
+        cache: join(updatesDir(), 'cabinet'),
+        source: nodeId => ({ name: resolvePeerDisplayName(nodeId) || nodeId, error: shareTargetIssue(nodeId) }),
+        fetch: async options => {
+          if (!files || !messenger) throw new Error('offline')
+          if (shareDownloadGate.hasPendingForPeer(options.nodeId)) throw new Error('busy')
+          const reqId = randomUUID()
+          try { return await files.fetchShareFile({ peerId: options.nodeId, reqId, name: basename(options.path), size: options.size,
+            maxBytes: options.maxBytes, saveDir: options.directory, signal: options.signal, onProgress: options.onProgress },
+          () => messenger!.sendReliable(options.nodeId, makeEnvelope(MSG_TYPES.share, selfNodeId(), {
+            op: 'get', reqId, paths: [options.path]
+          } satisfies SharePayload))) } catch (error) {
+            // 旧文件柜协议的 not-found 同时用于目录/文件，补一次受限目录读取以区分提示。
+            if (error instanceof Error && error.message === 'not-found' && !options.signal.aborted) {
+              const directory = options.path.includes('/') ? options.path.slice(0, options.path.lastIndexOf('/')) : ''
+              const listing = await requestShare(options.nodeId, { op: 'list', reqId: randomUUID(), path: directory, offset: 0 })
+              if (listing?.op === 'list-ok') throw new Error(options.path.endsWith('/teahouse-update.json') || options.path === 'teahouse-update.json' ? 'manifest-missing' : 'not-found')
+              if (listing?.op === 'deny' && listing.reason === 'not-found') throw new Error('directory-missing')
+            }
+            throw error
+          }
+        }, changed: state => broadcastEvent(IpcEvents.cabinetUpdateChanged, state),
+        available: () => { void confirmCabinetDownload().catch(error => cabinetUpdater?.fail(error)) }
+      }, appState.config.cabinetUpdate)
+      cabinetUpdater.start()
+      if (app.isPackaged) void inspectMacInstallHistory(process.execPath).then(error => {
+        if (error) cabinetUpdater?.fail(new Error(error))
+      }).catch(() => undefined)
+    }
 
     // pantry-img://<transferId> —— 渲染层取图的唯一通道（绕开 file:// 的 CSP/安全限制，
     // 且只放行 transfers 表里登记过的路径，不开任意文件读取口子）
@@ -3310,6 +3430,21 @@ if (!gotLock) {
     })
     void startNet()
     registerGlobalShortcuts()
+    // 启动握手放在正常窗口建立后，助手可区分新版本无法启动与成功交接。
+    if (process.platform === 'darwin' && process.argv.includes('--cabinet-update-token')) {
+      // 等待 renderer 真正完成 Vue 挂载，白屏或初始化失败不会误报安装成功。
+      const startupWindow = mainWindow
+      let checks = 0
+      const readyTimer = setInterval(() => {
+        if (!startupWindow || startupWindow.isDestroyed() || ++checks > 90) { clearInterval(readyTimer); return }
+        void startupWindow.webContents.executeJavaScript("Boolean(document.querySelector('#app')?.children.length)").then(ready => {
+          if (!ready) return
+          clearInterval(readyTimer)
+          void acknowledgeMacInstall(process.execPath, process.argv).catch(() => undefined)
+        }).catch(() => undefined)
+      }, 500)
+      readyTimer.unref()
+    }
 
     // 冒烟模式：窗口能起、1.5s 后干净退出即算通过（tech-design §10 的 CI 烟测同款）
     if (process.env['PANTRY_SMOKE']) {
@@ -3331,6 +3466,7 @@ if (!gotLock) {
     event.preventDefault()
     if (diagnosticClosing) return
     diagnosticClosing = true
+    cabinetUpdater?.stop()
     remoteView.close()
     isQuitting = true
     boards?.stop()

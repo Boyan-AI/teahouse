@@ -206,6 +206,32 @@ Package and lock versions must advance with each complete increment. The GitHub 
 
 Run `npm run test:agents` for native acceptance inside Electron’s Node16: SDK and local model mock, real SQLite, discovery between two users and an Agent, long TCP messages, explicit group mentions and exit/offline behavior. It uses only temporary directories and loopback ports. If the Electron binary is unavailable, this check remains unverified.
 
+## Publishing and verifying cabinet updates
+
+Updates reuse the existing `share-get` transfer. The receiver fixes the publisher node, relative folder, single filename, and byte limit. Manifests are limited to 64 KiB and packages to 512 MiB. Versions use exactly three stable numeric components. Required fields are `schema: 1`, `platform: "mac"`, `arch: "arm64"`, `version`, `file`, `size`, `sha256`, `notes` of at most 4000 characters, and `dataCompatible: true`. Unknown fields are rejected.
+
+Generate the manifest after building and signing the package. The `--compatible-data` flag explicitly declares that the release contains no incompatible data migrations.
+
+```sh
+npm run update:manifest -- /path/to/Teahouse-0.66.0-mac-arm64.dmg --compatible-data --notes /path/to/notes.txt
+```
+
+The generator streams the hash, checks for changes during reading, and atomically writes `teahouse-update.json` next to the package. Publish the complete versioned package first, then replace the manifest last. Keep published versioned files immutable. Restrict writes to the trusted publisher and grant recipients cabinet read access. Current node identity and ad-hoc signatures do not cryptographically authenticate the publisher. SHA256 provides integrity checking.
+
+The app ships its own installer helper through `extraResources`. The main process mounts the DMG read-only, verifies `com.pantry.app`, version, arm64 architecture, complete signatures, and link boundaries, then copies the app to `.teahouse-update-<random-ID>/next.app` beside the installed app. The old app quits after the helper acknowledges readiness. The helper backs up and replaces the bundle, starts the new process, and waits for its rendered UI handshake. It attempts rollback once on failure. Successful `previous.app` backups remain for seven days and are cleaned on a later startup using this feature’s transaction metadata. Failed transactions remain for inspection. Rollback restores the app bundle, so publishers must ensure backward-compatible data.
+
+The cache lives under the app data directory at `data/updates/cabinet`. Changing sources, canceling, sleeping, and quitting revoke download authorization. Legacy cabinet offers lack a request ID, so update downloads and ordinary pending downloads from the same publisher are mutually exclusive. The existing transfer protocol remains compatible.
+
+```sh
+npm run build
+PANTRY_CABINET_TEST=1 node scripts/extension-ui-selftest.cjs
+npm run test:macos-update
+```
+
+Desktop verification uses two isolated Electron clients and 127.0.0.1. It covers browsing, an older running publisher offering a newer package, prompt deduplication, confirmation, progress, integrity, permissions, corrupt manifests, and both languages and themes. Native tests create signed Mach-O fixtures in `out/` for successful replacement, a live parent process, denied permissions, invalid signatures, and startup rollback. If clang and the default SDK mismatch, set a compatible `SDKROOT` for the individual test command.
+
+For a complete Electron package test, add `PANTRY_UPDATE_DMG=<signed DMG within this project>` and `PANTRY_UPDATE_BASE_APP=<old app copy within this project>` to the native command. It uses production preparation and helper launch functions, verifies package resources, and waits for the new app’s UI handshake. Add the same variables to the desktop test with `PANTRY_CABINET_TEST=1` to download the real DMG through the cabinet and install the cache verified by the production downloader. The test manifest uses version 0.66.0, so the fixture package must match. Installation targets are freshly created copies in `out/`, with isolated user data and loopback networking. Detach test disk images after inspection so file discovery does not follow their Applications shortcut into system folders.
+
 ## macOS LAN test package signing
 
 A package without a developer certificate still needs a complete resource seal. Setting only mac.identity=null leaves Electron’s linker ad-hoc signature behind and may produce a “damaged” warning on another Mac. Enable the dedicated afterPack hook explicitly for LAN testing; do not change the normal signing path or system protections.

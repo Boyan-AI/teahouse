@@ -46,6 +46,7 @@ import AvatarMark from './components/AvatarMark.vue'
 import PantryBrandLogo from './components/PantryBrandLogo.vue'
 import PantryIcon from './components/PantryIcon.vue'
 import DiagnosticsPanel from './components/DiagnosticsPanel.vue'
+import CabinetUpdateSettings from './components/CabinetUpdateSettings.vue'
 import SettingsNavIcon from './components/SettingsNavIcon.vue'
 import ScanRangeImport from './components/ScanRangeImport.vue'
 import WindowControls from './components/WindowControls.vue'
@@ -1417,7 +1418,7 @@ async function confirmRemove(cidr: string): Promise<void> {
                   </a>
                 </dd>
               </div>
-              <div class="about-row about-update-row" :class="'is-' + updateCheckKind">
+              <div v-if="info?.platform !== 'darwin'" class="about-row about-update-row" :class="'is-' + updateCheckKind">
                 <dt>{{ tr('内网更新') }}</dt>
                 <dd aria-live="polite">
                   <div class="about-update-main">
@@ -1452,6 +1453,8 @@ async function confirmRemove(cidr: string): Promise<void> {
                 </dd>
               </div>
             </dl>
+
+            <CabinetUpdateSettings v-if="info?.platform === 'darwin'" />
 
             <!-- 开发者向运行时信息收进折叠区（决议 #90）：就地展开，Chrome 108 无原生 popover -->
             <button

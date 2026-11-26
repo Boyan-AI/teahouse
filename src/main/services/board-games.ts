@@ -27,6 +27,10 @@ const MAX_AGE = 2 * 60 * 60_000
 
 /** 无中心服务器的棋类房间；房主串行裁定选座与走子，访客只能提交动作。 */
 export class BoardGamesService extends EventEmitter {
+  /** 更新退出前查询当前仍参与的棋局，避免后台安装打断对局。 */
+  hasActiveGames(): boolean {
+    return [...this.entries.values()].some(entry => entry.joined && entry.room.phase === 'playing' && entry.room.seats.includes(this.deps.selfId))
+  }
   private readonly entries = new Map<string, Entry>()
   private readonly timer: ReturnType<typeof setInterval>
   constructor(private readonly deps: BoardDeps) {

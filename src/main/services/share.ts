@@ -476,6 +476,11 @@ const MAX_PENDING_DOWNLOADS = 32
 export class ShareDownloadGate {
   private pending: PendingDownload[] = []
 
+  /** 更新单文件请求与同一来源的普通下载授权互斥，保持旧协议可用。 */
+  hasPendingForPeer(peerId: string, now = Date.now()): boolean {
+    return this.pending.some(entry => entry.peerId === peerId && now < entry.expiresAt)
+  }
+
   /**
    * 登记一次性授权，返回撤销 / 探测用的句柄。
    *

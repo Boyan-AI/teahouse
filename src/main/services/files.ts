@@ -102,6 +102,8 @@ interface IncomingState {
 
 interface FilesBlob {
   name: string
+  /** 更新检查/下载使用文件柜数据面，但不进入普通传输列表。 */
+  cabinetUpdate?: boolean
   savedPath?: string
   purpose?: 'update' | 'share-get' | 'share-put'
   direct?: boolean
@@ -131,6 +133,25 @@ interface PreparedOutgoing {
 interface GroupOfferContext {
   groupId: string
   groupRev: number
+}
+
+/** 文件柜更新的单文件限额请求，落点由主进程管理，与普通下载授权隔离。 */
+export interface BoundedShareRequest {
+  peerId: string
+  reqId: string
+  name: string
+  maxBytes: number
+  size?: number
+  saveDir: string
+  signal: AbortSignal
+  onProgress: (bytes: number) => void
+}
+
+/** 请求开始前登记，offer、进度与结果均绑定同一传输 ID，取消后立即撤销。 */
+interface BoundedSharePending {
+  request: BoundedShareRequest
+  transferId: string | null
+  fail: (reason: string) => void
 }
 
 export interface FilesDeps {
@@ -173,6 +194,14 @@ export interface FilesDeps {
 }
 
 export class FilesService extends EventEmitter {
+  /** 安装退出前检查仍需用户保留的收发，不依赖截断的 UI 列表。 */
+  hasActiveTransfers(): boolean {
+    return [...this.incoming.keys(), ...this.outgoing.keys()].some(id => {
+      const status = this.deps.transferRepo.get(id)?.status
+      return status === 'offering' || status === 'accepted'
+    })
+  }
+  private boundedShare: BoundedSharePending | null = null
   private readonly server: TransferServer
   private readonly outgoing = new Map<string, OutgoingState>()
   private readonly assembling = new Map<string, AssemblingOffer>()
@@ -257,6 +286,7 @@ export class FilesService extends EventEmitter {
 
   /** 停止时取消入站拉流与分包定时器，禁止数据库关闭后迟到回调继续写入。 */
   stop(): Promise<void> {
+    this.boundedShare?.fail('canceled')
     for (const inc of this.incoming.values()) { inc.cancelRef.canceled = true; inc.cancelRef.socket?.destroy() }
     for (const asm of this.assembling.values()) clearTimeout(asm.timer)
     this.assembling.clear()
@@ -905,7 +935,8 @@ export class FilesService extends EventEmitter {
     }
   }
 
-  transferView(transferId: string): TransferView | null {
+  /** 普通界面隐藏更新传输，仅内部限额下载监听可读取其进度。 */
+  transferView(transferId: string, includeCabinetUpdate = false): TransferView | null {
     const row = this.deps.transferRepo.get(transferId)
     if (!row) return null
     let blob: FilesBlob = { name: '' }
@@ -915,6 +946,7 @@ export class FilesService extends EventEmitter {
       // 留默认
     }
     if (blob.purpose === 'update') return null
+    if (blob.cabinetUpdate && !includeCabinetUpdate) return null
     const msg = this.deps.msgRepo.get(row.msg_id)
     const inc = this.incoming.get(transferId)
     const out = this.outgoing.get(transferId)
@@ -1312,7 +1344,8 @@ export class FilesService extends EventEmitter {
     plans: IncomingFilePlan[],
     total: number,
     purpose: 'update' | 'share-get' | 'share-put',
-    saveDir: string
+    saveDir: string,
+    cabinetUpdate = false
   ): void {
     const msgId = `${purpose === 'update' ? 'update' : 'share'}:${transferId}`
     this.deps.transferRepo.insert({
@@ -1320,7 +1353,7 @@ export class FilesService extends EventEmitter {
       msgId,
       peerId,
       direction: 'in',
-      files: JSON.stringify({ name, purpose } satisfies FilesBlob),
+      files: JSON.stringify({ name, purpose, ...(cabinetUpdate ? { cabinetUpdate: true } : {}) } satisfies FilesBlob),
       status: 'offering',
       total,
       ts: Date.now(),
@@ -1383,6 +1416,21 @@ export class FilesService extends EventEmitter {
     plans: IncomingFilePlan[],
     trustedTotalSize: number
   ): void {
+    const bounded = this.boundedShare
+    if (bounded?.request.peerId === peerId && bounded.transferId === null) {
+      const request = bounded.request
+      const plan = plans[0]
+      if (asm.groupId || asm.msgId || plans.length !== 1 || asm.fileCount !== 1 || !plan || plan.isDir ||
+        plan.relPath !== request.name || asm.rootName !== request.name || trustedTotalSize <= 0 ||
+        trustedTotalSize > request.maxBytes || (request.size !== undefined && trustedTotalSize !== request.size)) {
+        void this.declineUnknown(peerId, offer.transferId)
+        bounded.fail('invalid-file')
+        return
+      }
+      bounded.transferId = offer.transferId
+      this.acceptAuxiliaryOffer(peerId, offer.transferId, request.name, plans, trustedTotalSize, 'share-get', request.saveDir, true)
+      return
+    }
     const saveDir = asm.groupId || asm.msgId ? null : this.deps.authorizeShareDownload?.(peerId) ?? null
     if (!saveDir || plans.length === 0) {
       void this.declineUnknown(peerId, offer.transferId)
@@ -1397,6 +1445,52 @@ export class FilesService extends EventEmitter {
       'share-get',
       saveDir
     )
+  }
+
+  /** 限额单文件下载复用 share-get 数据面，拒绝额外目录、大小变化及未经请求的文件。 */
+  fetchShareFile(request: BoundedShareRequest, send: () => Promise<boolean>): Promise<string> {
+    if (this.boundedShare) return Promise.reject(new Error('busy'))
+    if (request.signal.aborted) return Promise.reject(new Error('canceled'))
+    return new Promise<string>((resolveFile, reject) => {
+      const pending: BoundedSharePending = { request, transferId: null, fail: reason => finish(new Error(reason)) }
+      const timer = setTimeout(() => finish(new Error('timeout')), request.maxBytes <= 65536 ? 30_000 : 10 * 60_000)
+      /** 先撤销授权和监听再取消传输，迟到结果不能完成新请求。 */
+      const finish = (error?: Error, path?: string): void => {
+        if (this.boundedShare !== pending) return
+        this.boundedShare = null
+        clearTimeout(timer)
+        request.signal.removeEventListener('abort', abort)
+        this.removeListener('cabinet-transfer', progress)
+        if (error) {
+          if (pending.transferId) void this.cancel(pending.transferId)
+          reject(error)
+        } else resolveFile(path!)
+      }
+      /** 只观察本次授权消费的传输。 */
+      const progress = (view: TransferView): void => {
+        if (view.transferId !== pending.transferId) return
+        request.onProgress(view.bytesDone)
+        if (view.status === 'done') finish(undefined, view.savedPath)
+        else if (['failed', 'canceled', 'declined', 'expired'].includes(view.status)) finish(new Error('download-failed'))
+      }
+      const abort = (): void => finish(new Error('canceled'))
+      this.boundedShare = pending
+      this.on('cabinet-transfer', progress)
+      request.signal.addEventListener('abort', abort, { once: true })
+      void send().then(sent => { if (!sent) finish(new Error('offline')) }).catch(() => finish(new Error('offline')))
+    })
+  }
+
+  /** 只消费固定发布者对本次请求 ID 的拒绝，兼容原有文件柜报文格式。 */
+  rejectShareFile(peerId: string, reqId: string, reason: string): void {
+    if (this.boundedShare?.request.peerId === peerId && this.boundedShare.request.reqId === reqId) {
+      this.boundedShare.fail(reason)
+    }
+  }
+
+  /** 同一来源的普通下载暂缓，避免旧版无请求 ID 的 offer 与更新请求混用。 */
+  isFetchingShareFrom(peerId: string): boolean {
+    return this.boundedShare?.request.peerId === peerId
   }
 
   /**
@@ -1884,6 +1978,11 @@ export class FilesService extends EventEmitter {
     const now = Date.now()
     if (!force && now - (this.lastEmit.get(transferId) ?? 0) < 250) return
     this.lastEmit.set(transferId, now)
+    if (this.boundedShare?.transferId === transferId) {
+      const boundedView = this.transferView(transferId, true)
+      if (boundedView) this.emit('cabinet-transfer', boundedView)
+      return
+    }
     const view = this.transferView(transferId)
     if (view) {
       if (force) this.deps.diagnostic?.('transfer.state', { transferId, msgId: view.msgId, peerId: view.peerId,

@@ -1,4 +1,5 @@
 import type { ImageMessageMeta } from './image-message'
+import type { CabinetUpdateConfig, CabinetUpdateState } from './cabinet-update'
 import type { AgentInput, AgentView } from './agents'
 import type { BoardAction, BoardGame, BoardInvite, BoardView } from './board-games'
 import type { Language, SystemMessage } from './i18n'
@@ -11,6 +12,12 @@ import type { PkGame, PkRefView } from './pk'
 import type { ScreenAvailability, ScreenState, ScreenSource, ScreenMode, ScreenImage, ScreenSample, ScreenRequestResult } from './remote-view'
 
 export const IpcChannels = {
+  cabinetUpdateState: 'cabinet-update:state',
+  cabinetUpdateConfigure: 'cabinet-update:configure',
+  cabinetUpdateCheck: 'cabinet-update:check',
+  cabinetUpdateDownload: 'cabinet-update:download',
+  cabinetUpdateInstall: 'cabinet-update:install',
+  cabinetUpdateCancel: 'cabinet-update:cancel',
   agentsOpen: 'agents:open', agentsList: 'agents:list', agentsSave: 'agents:save', agentsRemove: 'agents:remove',
   stickersOpen: 'stickers:open',
   imageDraftSource: 'image:draft-source',
@@ -147,6 +154,7 @@ export const IpcChannels = {
 
 /** main → renderer 的事件推送 */
 export const IpcEvents = {
+  cabinetUpdateChanged: 'cabinet-update:changed',
   stickersChanged: 'stickers:changed',
   agentsChanged: 'agents:changed', boardChanged: 'board:changed',
 
@@ -836,6 +844,14 @@ export interface PantryApi {
   reportImageDecodeFailure(transferId: string): Promise<void>
   /** 局域网自更新：查询当前可用更新源，无则 null（决议 #166） */
   checkUpdate(): Promise<UpdateAvailability | null>
+  /** macOS 文件柜更新只暴露状态与确认操作，不接受任意本地文件路径。 */
+  getCabinetUpdate(): Promise<CabinetUpdateState | null>
+  configureCabinetUpdate(config: CabinetUpdateConfig): Promise<CabinetUpdateState | null>
+  checkCabinetUpdate(): Promise<CabinetUpdateState | null>
+  downloadCabinetUpdate(): Promise<CabinetUpdateState | null>
+  installCabinetUpdate(): Promise<CabinetUpdateState | null>
+  cancelCabinetUpdate(): Promise<CabinetUpdateState | null>
+  onCabinetUpdate(listener: (state: CabinetUpdateState) => void): () => void
   /** 局域网自更新：向当前最佳更新源请求安装包，返回请求是否已送达 */
   requestUpdate(): Promise<boolean>
   /** 局域网自更新：可用更新源变化推送（决议 #166） */

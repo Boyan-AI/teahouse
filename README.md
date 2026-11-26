@@ -179,6 +179,16 @@ xattr -dr com.apple.quarantine /Applications/Teahouse.app
 - [iptux](https://github.com/iptux-src/iptux) — Linux 环境下流行的局域网通信工具
 - 飞秋（FeiQ）、内网通 — Windows 平台广泛使用的局域网即时通信产品，提供了优秀的产品形态参考
 
+## macOS 文件柜更新
+
+在 **设置 → 关于 → 文件柜更新** 选择可信发布者与柜内目录，保存后可立即检查，或启用启动后及每 30 分钟检查。来源按节点身份固定，发布者须在线并允许读取。发布者当前运行的应用版本不影响目录内新包的发现。
+
+发现新版会显示版本、发布者、说明与体积。选择 **稍后** 保留更新提示，当前会话同一来源同一版本只自动提示一次。选择 **下载并更新** 后才下载 DMG，校验实际大小和 SHA256，安装时退出并重启。下载期间产生新的文件传输、棋局或 AI 请求时，退出前会再次确认。来源离线、无权限、目录缺失、清单损坏和没有更高版本分别显示状态。
+
+当前支持 macOS arm64，应用须安装在可写目录。磁盘映像、App Translocation 或不可写安装位置需要先手动安装到可写应用目录。安装会保留旧应用，若新版本无法启动则尝试恢复并重启旧应用一次。成功更新的备份保留七天，后续启动时清理，失败事务保留供检查。聊天数据与设置继续使用原目录，应用回滚不恢复数据库，因此清单仅接受发布者明确声明的数据兼容更新。
+
+发布目录放置完整的 `Teahouse-<版本>-mac-arm64.dmg` 与 `teahouse-update.json`。发布者先完成安装包，再生成或原子替换清单。目录只允许可信发布者写入，客户端仅需读取权限。SHA256 和临时签名用于检查完整性，发布者信任由你选择的节点与目录权限建立。临时签名仍受 macOS Gatekeeper 限制，具体生成命令和验证步骤见开发文档。[DEVELOPMENT.md](DEVELOPMENT.md#文件柜更新的发布与验证)
+
 ## 第三方资源
 
 渲染层标准表单与操作组件选用 [Naive UI](https://github.com/tusen-ai/naive-ui) 2.43.2（本地构建，MIT）；内置头像与 emoji 兼容显示采用 [Twemoji](https://github.com/jdecked/twemoji) SVG 图形子集（本地打包，CC-BY 4.0）；内置离线 OCR 采用 PaddleOCR 模型与 onnxruntime-web。完整第三方开源声明详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

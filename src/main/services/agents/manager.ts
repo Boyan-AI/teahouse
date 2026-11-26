@@ -7,6 +7,8 @@ import type { PeerRecord } from '../../net/peer-registry'
 
 /** 只有本机创建者持有配置和密钥；串行管理操作避免启停竞态重复托管。 */
 export class AgentManager extends EventEmitter {
+  /** 汇总托管 Agent 的在途请求，供应用退出前提示使用。 */
+  hasActiveRequests(): boolean { return [...this.runtimes.values()].some(runtime => runtime.hasActiveRequests()) }
   private readonly runtimes = new Map<string, AgentRuntime>()
   private readonly states = new Map<string, Pick<AgentView, 'status' | 'error'>>()
   private serial = Promise.resolve()
