@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "src/renderer/src/SettingsApp.vue"
+        ],
+        "createdAt": "2026-11-26T09:27:44.263Z",
+        "reason": "Codex: detector misidentifies .color-choice.on::after; width and height are both 8px, inset: 0 plus margin: auto centers a circular selection marker with border-radius: 50%, not a side stripe; git blame dates it to eb388d9 before this task."
+      }
+    ]
+  }
+}
